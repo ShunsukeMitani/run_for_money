@@ -1,0 +1,41 @@
+name: Build iOS IPA (AltStore)
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: # 手動実行用のボタンを有効化
+
+jobs:
+  build-ios:
+    name: Build iOS IPA
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build iOS (No Codesign)
+        # 署名なしでビルド（無料Apple IDやSideloadly用）
+        run: flutter build ios --release --no-codesign
+
+      - name: Create IPA for AltStore / Sideloadly
+        # ビルドしたファイルをIPA形式に圧縮する
+        run: |
+          mkdir -p Payload
+          mv build/ios/iphoneos/Runner.app Payload/
+          zip -r Runner.ipa Payload
+
+      - name: Upload IPA Artifact
+        # 成果物をダウンロードできるようにアップロード
+        uses: actions/upload-artifact@v4
+        with:
+          name: run_for_money_ios
+          path: Runner.ipa
