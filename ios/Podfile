@@ -1,5 +1,5 @@
 # ios/Podfile
-platform :ios, '14.0' # ★ここを14.0に変更
+platform :ios, '15.0' # ★ここを14.0に変更
 
 # Flutterの設定読み込み
 def flutter_root
