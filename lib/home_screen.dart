@@ -47,6 +47,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _isLocked = false;
 
   bool _hasValidUserLoaded = false;
+  bool _isIncomingCall = false; // ★追加: 着信中かどうかを判定するフラグ
 
   // ★あなたのDiscordサーバーID
   final String _discordServerId = "1461039637505245225";
@@ -108,6 +109,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _checkIfCallFinished() async {
+    if (_isIncomingCall) return; // ★追加: 着信中は終了確認を出さないようにブロック
+
     User? user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
@@ -175,10 +178,45 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       onDidReceiveNotificationResponse: (NotificationResponse response) async {
         FlutterRingtonePlayer().stop();
         final String? payload = response.payload;
-        if (response.actionId == 'answer_id' && payload != null) {
-          await _launchDiscordChannel(payload);
-        } else if (response.actionId == 'decline_id') {
-          await _hangUp();
+        
+        // ★修正: 通知バナーから応答/拒否した場合も相手に知らせる
+        if (payload != null && payload.contains('|')) {
+          List<String> parts = payload.split('|');
+          String channelId = parts[0];
+          String fromUid = parts[1];
+          String myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+          
+          if (response.actionId == 'answer_id') {
+            if (mounted && _isIncomingCall) {
+              Navigator.of(context, rootNavigator: true).pop(); // 画面の着信ダイアログも閉じる
+            }
+            if (myUid.isNotEmpty) {
+              await FirebaseFirestore.instance.collection('games').doc('game_001').collection('messages').add({
+                'type': 'CALL_ACCEPTED',
+                'fromUid': myUid,
+                'toUid': fromUid,
+                'channelId': channelId,
+                'createdAt': FieldValue.serverTimestamp(),
+              });
+            }
+            await _launchDiscordChannel(channelId);
+          } else if (response.actionId == 'decline_id') {
+            if (mounted && _isIncomingCall) {
+              Navigator.of(context, rootNavigator: true).pop(); // 画面の着信ダイアログも閉じる
+            }
+            if (myUid.isNotEmpty) {
+              await FirebaseFirestore.instance.collection('games').doc('game_001').collection('messages').add({
+                'title': "通話拒否",
+                'body': "相手が通話を拒否しました。",
+                'type': 'CALL_DECLINED',
+                'fromUid': myUid,
+                'fromName': widget.myName,
+                'toUid': fromUid,
+                'createdAt': FieldValue.serverTimestamp(),
+              });
+            }
+            await _hangUp(silent: true);
+          }
         }
       },
     );
@@ -232,7 +270,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       "📞 着信",
                       "${data['fromName']} から着信中...",
                       isCall: true,
-                      payload: data['channelId'],
+                      payload: "${data['channelId']}|${data['fromUid']}", // ★修正: チャンネルと相手のIDを渡す
                     );
                   } else if (data['type'] == 'CALL_ACCEPTED' &&
                       data['toUid'] == myUid) {
@@ -291,7 +329,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _showIncomingCallDialog(Map<String, dynamic> data) {
-    // ★修正: ()を追加して再生
+    _isIncomingCall = true; // ★追加: ダイアログが出た瞬間に「着信中」にする
+
     FlutterRingtonePlayer().playRingtone(looping: true);
 
     showDialog(
@@ -352,7 +391,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ],
       ),
     ).then((_) {
-      FlutterRingtonePlayer().stop(); // ★修正: ()を追加
+      _isIncomingCall = false; // ★追加: ダイアログが消えたら「着信中」を解除する
+      FlutterRingtonePlayer().stop(); 
     });
   }
 

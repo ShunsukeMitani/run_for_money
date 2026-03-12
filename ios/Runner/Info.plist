@@ -66,5 +66,16 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>ゲーム内で現在位置を表示し、エリア判定を行うために位置情報を使用します。</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>バックグラウンドでも位置情報を更新するために使用します。</string>
+
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>discord</string>
+		<string>https</string>
+		<string>http</string>
+	</array>
 </dict>
 </plist>

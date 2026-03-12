@@ -762,7 +762,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         List surrenderPoints = d['surrenderPoints'] ?? [];
         List hunterBoxes = d['hunterBoxes'] ?? [];
         var mission = d['activeMission'];
-        bool isBoxMission = mission != null && mission['type'] == 'HUNTER_BOX';
+        bool isBoxMission = mission != null && mission['type'] == 'HUNTER_BOX_MAP';
         bool isVotingMission = mission != null && mission['type'] == 'VOTING';
 
         List<Polygon> polygons = [];
@@ -927,19 +927,34 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
               );
             }
 
+           
             // ハンターBOX
             for (var b in hunterBoxes) {
               bool locked = b['isLocked'] ?? false;
               markers.add(
                 Marker(
                   point: LatLng(b['lat'], b['lng']),
-                  width: 50,
-                  height: 50,
+                  width: 60, // ★少しだけタップ判定を広げました
+                  height: 60,
                   child: GestureDetector(
+                    behavior: HitTestBehavior.opaque, // ★追加: 透明な部分をタップしても反応するようにする
                     onTap: () {
-                      if (!locked && isBoxMission && widget.myRole == 'RUNNER') {
-                        _lockHunterBox(b);
+                      // ★追加: なぜ反応しないのか原因を画面に出すように変更
+                      if (locked) {
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("このBOXは既に封印されています")));
+                        return;
                       }
+                      if (widget.myRole != 'RUNNER') {
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("BOXを封印できるのは「逃走者」のみです", style: TextStyle(color: Colors.white)), backgroundColor: Colors.red));
+                        return;
+                      }
+                      if (!isBoxMission) {
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("現在、ハンターBOXミッションは発動していません", style: TextStyle(color: Colors.white)), backgroundColor: Colors.orange));
+                        return;
+                      }
+                      
+                      // すべての条件をクリアしたら封印処理へ
+                      _lockHunterBox(b);
                     },
                     child: Column(
                       children: [
