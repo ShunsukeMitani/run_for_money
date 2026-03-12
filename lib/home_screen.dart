@@ -2990,6 +2990,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                     onTap: () => _openPhotoReviewList(context),
                                   ),
                                 ],
+                                if (!kIsWeb)
+                                  _AppIcon(
+                                    icon: Icons.notifications_active,
+                                    label: "通知設定",
+                                    color: Colors.orangeAccent,
+                                    onTap: () async {
+                                      String myUid = FirebaseAuth.instance.currentUser!.uid;
+                                      // ⚠️ 先ほどデプロイしたあなたのHosting URLに、 /?uid=$myUid を足したもの
+                                      Uri url = Uri.parse("https://run-for-money-f042a.web.app//?uid=$myUid");
+                                      
+                                      if (await canLaunchUrl(url)) {
+                                        await launchUrl(url, mode: LaunchMode.externalApplication);
+                                      }
+                                    },
+                                  ),
                                 if (widget.myRole == 'DEVELOPER')
                                   _AppIcon(
                                     icon: Icons.settings_ethernet,
