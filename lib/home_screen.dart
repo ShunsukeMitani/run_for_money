@@ -47,15 +47,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _isLocked = false;
   bool _hasValidUserLoaded = false;
   
-  bool _isIncomingCall = false; // ★昨日追加した着信フラグを復活！
+  bool _isIncomingCall = false;
+  // ★追加：アプリが今「画面に表示されているか」を確実に記憶する変数
+  bool _isAppInForeground = true; 
 
-  // ★あなたのDiscordサーバーID
   final String _discordServerId = "1461039637505245225";
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _isAppInForeground = true; // ★初期化
     _initNotifications();
     _setupMessageListener();
     FirebaseFirestore.instance
@@ -89,6 +91,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // ★リアルタイムに画面の状態を記録！
+    _isAppInForeground = state == AppLifecycleState.resumed;
+
     if (state == AppLifecycleState.resumed) {
       _checkIfCallFinished();
     }
@@ -105,7 +110,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _checkIfCallFinished() async {
-    if (_isIncomingCall) return; // ★昨日追加したブロック処理を復活！
+    if (_isIncomingCall) return;
 
     User? user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
@@ -171,7 +176,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         FlutterRingtonePlayer().stop();
         final String? payload = response.payload;
         
-        // ★昨日追加したDiscordに飛ぶ処理を復活！
         if (payload != null && payload.contains('|')) {
           List<String> parts = payload.split('|');
           String channelId = parts[0];
@@ -246,20 +250,33 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               if (data['fromUid'] != myUid) {
                 if (data['createdAt'] != null &&
                     DateTime.now().difference((data['createdAt'] as Timestamp).toDate()).inSeconds < 5) {
+                  
+                  // ① 共通：バイブレーション
                   HapticFeedback.heavyImpact();
 
-                  // ★今回追加：アプリがフォアグラウンドか判定
+                  // ② 今、画面が開かれているか？ と、iPhoneかどうかの判定
                   bool isForeground = WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+                  bool isIOS = defaultTargetPlatform == TargetPlatform.iOS;
 
+                  // ③ 【超重要】iPhoneでアプリを開いている時だけ、手動で強制的に「ピロリン♪」を鳴らす！（無音問題の解決）
+                  if (isForeground && isIOS) {
+                    FlutterRingtonePlayer().playNotification();
+                  }
+
+                  // --- 個別の処理 ---
                   if (data['type'] == 'CALL_REQUEST' && data['toUid'] == myUid) {
-                    _showIncomingCallDialog(data);
                     if (isForeground) {
-                      _showNotification(
-                        "📞 着信",
-                        "${data['fromName']} から着信中...",
-                        isCall: true,
-                        payload: "${data['channelId']}|${data['fromUid']}",
-                      );
+                      _showIncomingCallDialog(data); // アプリを開いていれば着信画面を出す
+                    } else {
+                      // 裏画面の時：iPhoneはPCサーバーに任せる。AndroidだけFlutterのバナーを出す。
+                      if (!isIOS) {
+                        _showNotification(
+                          "📞 着信",
+                          "${data['fromName']} から着信中...",
+                          isCall: true,
+                          payload: "${data['channelId']}|${data['fromUid']}",
+                        );
+                      }
                     }
                   } else if (data['type'] == 'CALL_ACCEPTED' && data['toUid'] == myUid) {
                     Navigator.of(context).popUntil((route) => route.isFirst || route.settings.name != null);
@@ -267,23 +284,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("相手が応答しました！接続します...")));
                   } else if (data['type'] == 'CALL_DECLINED' && data['toUid'] == myUid) {
                     Navigator.of(context).popUntil((route) => route.isFirst);
-                    if (isForeground) _showNotification("通話拒否", "${data['fromName']} が通話を拒否しました");
-                    showDialog(
-                      context: context,
-                      builder: (ctx) => AlertDialog(
-                        title: const Text("拒否されました"),
-                        content: const Text("相手が応答できませんでした。"),
-                        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("OK"))],
-                      ),
-                    );
-                  } else if (data['type'] == 'PHOTO_RESULT' && data['toUid'] == myUid) {
-                    if (isForeground) _showNotification(data['title'] ?? "審査結果", data['body'] ?? "写真の審査結果が届きました");
-                  } else if (data['type'] == 'CHAT') {
-                    if (isForeground) _showNotification(data['title'] ?? "新着メール", data['body'] ?? "メッセージが届いています");
-                  } else if (data['type'] == 'MISSION' || data['type'] == 'SUCCESS') {
-                    if (isForeground) _showNotification(data['title'] ?? "GAME UPDATE", data['body'] ?? "新しい情報があります");
+                    if (isForeground) {
+                      showDialog(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          title: const Text("拒否されました"),
+                          content: const Text("相手が応答できませんでした。"),
+                          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("OK"))],
+                        ),
+                      );
+                    } else {
+                      if (!isIOS) _showNotification("通話拒否", "${data['fromName']} が通話を拒否しました");
+                    }
                   } else {
-                    if (isForeground) _showNotification(data['title'] ?? "通知", data['body'] ?? "");
+                    // --- MISSION, CHAT などその他の通知 ---
+                    // iPhoneは「PCサーバー（Web Push）」がバナーを出すので、Flutterからは絶対にバナーを出さない（ダブり完全消滅）
+                    // Androidは自前サーバー非対応なので、必ずFlutterからバナーを出す
+                    if (!isIOS) {
+                      _showNotification(data['title'] ?? "通知", data['body'] ?? "新しい情報があります");
+                    }
                   }
                 }
               }
@@ -293,7 +312,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _showIncomingCallDialog(Map<String, dynamic> data) {
-    _isIncomingCall = true; // ★昨日追加したフラグ
+    _isIncomingCall = true;
     FlutterRingtonePlayer().playRingtone(looping: true);
 
     showDialog(
@@ -354,7 +373,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ],
       ),
     ).then((_) {
-      _isIncomingCall = false; // ★昨日追加したフラグ解除
+      _isIncomingCall = false;
       FlutterRingtonePlayer().stop();
     });
   }
