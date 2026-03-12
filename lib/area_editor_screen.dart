@@ -209,12 +209,17 @@ class _AreaEditorScreenState extends State<AreaEditorScreen> {
             ),
           ),
           if (_editMode == 'FORBIDDEN')
-            TextButton(
-              onPressed: () {
-                setState(() => _forbiddenAreas.clear());
-                _saveAreas();
-              },
-              child: const Text("進入禁止エリアをすべて削除", style: TextStyle(color: Colors.redAccent)),
+            SafeArea( // ★魔法のバリアを追加！これでナビゲーションバーを避けます
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 10.0), // ★少しだけ上に隙間を空けて押しやすくする
+                child: TextButton(
+                  onPressed: () {
+                    setState(() => _forbiddenAreas.clear());
+                    _saveAreas();
+                  },
+                  child: const Text("進入禁止エリアをすべて削除", style: TextStyle(color: Colors.redAccent)),
+                ),
+              ),
             ),
         ],
       ),

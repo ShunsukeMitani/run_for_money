@@ -110,7 +110,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _checkIfCallFinished() async {
-    if (_isIncomingCall) return;
+    // ★追加：データベースの読み込み（着信画面の準備）が終わるまで2秒待機する！
+    await Future.delayed(const Duration(seconds: 2));
+
+    if (!mounted) return;
+    if (_isIncomingCall) return; // 着信画面が出ているならストップ！
 
     User? user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
@@ -238,77 +242,85 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         .limit(1)
         .snapshots()
         .listen((snapshot) {
-          if (snapshot.docs.isNotEmpty) {
-            var data = snapshot.docs.first.data();
-            String myUid = FirebaseAuth.instance.currentUser!.uid;
+      if (snapshot.docs.isNotEmpty) {
+        var doc = snapshot.docs.first;
+        var data = doc.data();
+        String docId = doc.id;
+        String myUid = FirebaseAuth.instance.currentUser!.uid;
 
-            if (data['visibleTo'] != null && data['visibleTo'] != widget.myRole) {
-              return;
-            }
+        if (data['visibleTo'] != null && data['visibleTo'] != widget.myRole) {
+          return;
+        }
 
-            if (data['toUid'] == myUid || data['toUid'] == "ALL") {
-              if (data['fromUid'] != myUid) {
-                if (data['createdAt'] != null &&
-                    DateTime.now().difference((data['createdAt'] as Timestamp).toDate()).inSeconds < 5) {
-                  
+        if (data['toUid'] == myUid || data['toUid'] == "ALL") {
+          if (data['fromUid'] != myUid) {
+            if (data['createdAt'] != null) {
+              int diff = DateTime.now().difference((data['createdAt'] as Timestamp).toDate()).inSeconds;
+              
+              // ★着信だけは「60秒間」有効にする！
+              int timeLimit = (data['type'] == 'CALL_REQUEST') ? 60 : 5;
+
+              if (diff < timeLimit) {
+                // ★すでに処理したメッセージは弾く（ダブり防止の絶対防壁）
+                if (_readMessageIds.contains(docId)) return;
+                _readMessageIds.add(docId);
+
+                bool isForeground = WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+                bool isIOS = defaultTargetPlatform == TargetPlatform.iOS;
+
+                // 着信以外はここでバイブを鳴らす
+                if (data['type'] != 'CALL_REQUEST') {
                   HapticFeedback.heavyImpact();
+                }
 
-                  bool isForeground = WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
-                  bool isIOS = defaultTargetPlatform == TargetPlatform.iOS;
+                // 📞 【着信の場合】
+                if (data['type'] == 'CALL_REQUEST' && data['toUid'] == myUid) {
+                  
+                  _showIncomingCallDialog(data); // 裏でも表でも絶対に着信ダイアログを出す
 
-                  // 📞 【着信の場合】
-                  if (data['type'] == 'CALL_REQUEST' && data['toUid'] == myUid) {
-                    
-                    // ★超重要：裏画面でも表画面でも、必ず着信ダイアログを準備して着信音を鳴らす！
-                    _showIncomingCallDialog(data); 
+                  if (!isForeground && !isIOS) {
+                    _showNotification(
+                      "📞 着信",
+                      "${data['fromName']} から着信中...",
+                      isCall: true,
+                      payload: "${data['channelId']}|${data['fromUid']}",
+                    );
+                  }
+                } 
+                // 📩 【それ以外の通知の場合】
+                else {
+                  if (isForeground && isIOS) {
+                    FlutterRingtonePlayer().playNotification();
+                  }
 
-                    if (!isForeground && !isIOS) {
-                      // Androidの裏画面の時だけ、追加で通知バナーを出す
-                      _showNotification(
-                        "📞 着信",
-                        "${data['fromName']} から着信中...",
-                        isCall: true,
-                        payload: "${data['channelId']}|${data['fromUid']}",
+                  if (data['type'] == 'CALL_ACCEPTED' && data['toUid'] == myUid) {
+                    Navigator.of(context).popUntil((route) => route.isFirst || route.settings.name != null);
+                    _launchDiscordChannel(data['channelId']);
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("相手が応答しました！接続します...")));
+                  } else if (data['type'] == 'CALL_DECLINED' && data['toUid'] == myUid) {
+                    Navigator.of(context).popUntil((route) => route.isFirst);
+                    if (isForeground) {
+                      showDialog(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          title: const Text("拒否されました"),
+                          content: const Text("相手が応答できませんでした。"),
+                          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("OK"))],
+                        ),
                       );
-                    }
-                  } 
-                  // 📩 【それ以外の通知の場合】
-                  else {
-                    // iPhoneで画面を開いている時だけ、「ピロリン♪」を鳴らす（着信音との被り防止）
-                    if (isForeground && isIOS) {
-                      FlutterRingtonePlayer().playNotification();
-                    }
-
-                    if (data['type'] == 'CALL_ACCEPTED' && data['toUid'] == myUid) {
-                      Navigator.of(context).popUntil((route) => route.isFirst || route.settings.name != null);
-                      _launchDiscordChannel(data['channelId']);
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("相手が応答しました！接続します...")));
-                    } else if (data['type'] == 'CALL_DECLINED' && data['toUid'] == myUid) {
-                      Navigator.of(context).popUntil((route) => route.isFirst);
-                      if (isForeground) {
-                        showDialog(
-                          context: context,
-                          builder: (ctx) => AlertDialog(
-                            title: const Text("拒否されました"),
-                            content: const Text("相手が応答できませんでした。"),
-                            actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("OK"))],
-                          ),
-                        );
-                      } else {
-                        if (!isIOS) _showNotification("通話拒否", "${data['fromName']} が通話を拒否しました");
-                      }
                     } else {
-                      // MISSION, CHAT 等
-                      if (!isIOS) {
-                        _showNotification(data['title'] ?? "通知", data['body'] ?? "新しい情報があります");
-                      }
+                      if (!isIOS) _showNotification("通話拒否", "${data['fromName']} が通話を拒否しました");
                     }
+                  } else {
+                    if (!isIOS) _showNotification(data['title'] ?? "通知", data['body'] ?? "新しい情報があります");
                   }
                 }
               }
             }
           }
-        });
+        }
+      }
+    });
   }
 
   void _showIncomingCallDialog(Map<String, dynamic> data) {
