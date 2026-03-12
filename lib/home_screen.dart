@@ -45,9 +45,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _isConnected = true;
   final Set<String> _readMessageIds = {};
   bool _isLocked = false;
-
   bool _hasValidUserLoaded = false;
-  bool _isIncomingCall = false; // ★追加: 着信中かどうかを判定するフラグ
+  
+  bool _isIncomingCall = false; // ★昨日追加した着信フラグを復活！
 
   // ★あなたのDiscordサーバーID
   final String _discordServerId = "1461039637505245225";
@@ -67,9 +67,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           onError: (_) => setState(() => _isConnected = false),
         );
 
-    // 画面起動から2秒後に「削除チェック」を有効にする (参加直後の誤検知防止)
-
-    // 15秒経ってもデータがロードされなければ(削除済みとみなして)ログアウト
     Future.delayed(const Duration(seconds: 15), () {
       if (mounted &&
           !_hasValidUserLoaded &&
@@ -86,7 +83,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!kIsWeb && _isLocked) {
       FlutterLockTask().stopLockTask();
     }
-    // ★修正: ()を追加
     FlutterRingtonePlayer().stop();
     super.dispose();
   }
@@ -109,7 +105,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _checkIfCallFinished() async {
-    if (_isIncomingCall) return; // ★追加: 着信中は終了確認を出さないようにブロック
+    if (_isIncomingCall) return; // ★昨日追加したブロック処理を復活！
 
     User? user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
@@ -139,9 +135,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               child: const Text("いいえ (通話中)"),
             ),
             ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.redAccent,
-              ),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
               onPressed: () {
                 Navigator.pop(dialogContext);
                 _hangUp();
@@ -155,11 +149,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _initNotifications() async {
-    // Android用設定
     const AndroidInitializationSettings initializationSettingsAndroid =
         AndroidInitializationSettings('@mipmap/ic_launcher');
 
-    // iOS用設定 (初期化時はリクエストしない設定にする)
     const DarwinInitializationSettings initializationSettingsDarwin =
         DarwinInitializationSettings(
           requestSoundPermission: false,
@@ -179,7 +171,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         FlutterRingtonePlayer().stop();
         final String? payload = response.payload;
         
-        // ★修正: 通知バナーから応答/拒否した場合も相手に知らせる
+        // ★昨日追加したDiscordに飛ぶ処理を復活！
         if (payload != null && payload.contains('|')) {
           List<String> parts = payload.split('|');
           String channelId = parts[0];
@@ -188,7 +180,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           
           if (response.actionId == 'answer_id') {
             if (mounted && _isIncomingCall) {
-              Navigator.of(context, rootNavigator: true).pop(); // 画面の着信ダイアログも閉じる
+              Navigator.of(context, rootNavigator: true).pop();
             }
             if (myUid.isNotEmpty) {
               await FirebaseFirestore.instance.collection('games').doc('game_001').collection('messages').add({
@@ -202,7 +194,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             await _launchDiscordChannel(channelId);
           } else if (response.actionId == 'decline_id') {
             if (mounted && _isIncomingCall) {
-              Navigator.of(context, rootNavigator: true).pop(); // 画面の着信ダイアログも閉じる
+              Navigator.of(context, rootNavigator: true).pop();
             }
             if (myUid.isNotEmpty) {
               await FirebaseFirestore.instance.collection('games').doc('game_001').collection('messages').add({
@@ -221,7 +213,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       },
     );
 
-    // ★追加: ここで明示的にiOSの許可リクエストを出す
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
       await _notificationsPlugin
           .resolvePlatformSpecificImplementation<
@@ -247,79 +238,52 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             var data = snapshot.docs.first.data();
             String myUid = FirebaseAuth.instance.currentUser!.uid;
 
-            if (data['visibleTo'] != null &&
-                data['visibleTo'] != widget.myRole) {
+            if (data['visibleTo'] != null && data['visibleTo'] != widget.myRole) {
               return;
             }
 
             if (data['toUid'] == myUid || data['toUid'] == "ALL") {
               if (data['fromUid'] != myUid) {
                 if (data['createdAt'] != null &&
-                    DateTime.now()
-                            .difference(
-                              (data['createdAt'] as Timestamp).toDate(),
-                            )
-                            .inSeconds <
-                        5) {
+                    DateTime.now().difference((data['createdAt'] as Timestamp).toDate()).inSeconds < 5) {
                   HapticFeedback.heavyImpact();
 
-                  if (data['type'] == 'CALL_REQUEST' &&
-                      data['toUid'] == myUid) {
+                  // ★今回追加：アプリがフォアグラウンドか判定
+                  bool isForeground = WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+
+                  if (data['type'] == 'CALL_REQUEST' && data['toUid'] == myUid) {
                     _showIncomingCallDialog(data);
-                    _showNotification(
-                      "📞 着信",
-                      "${data['fromName']} から着信中...",
-                      isCall: true,
-                      payload: "${data['channelId']}|${data['fromUid']}", // ★修正: チャンネルと相手のIDを渡す
-                    );
-                  } else if (data['type'] == 'CALL_ACCEPTED' &&
-                      data['toUid'] == myUid) {
-                    Navigator.of(context).popUntil(
-                      (route) => route.isFirst || route.settings.name != null,
-                    );
+                    if (isForeground) {
+                      _showNotification(
+                        "📞 着信",
+                        "${data['fromName']} から着信中...",
+                        isCall: true,
+                        payload: "${data['channelId']}|${data['fromUid']}",
+                      );
+                    }
+                  } else if (data['type'] == 'CALL_ACCEPTED' && data['toUid'] == myUid) {
+                    Navigator.of(context).popUntil((route) => route.isFirst || route.settings.name != null);
                     _launchDiscordChannel(data['channelId']);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("相手が応答しました！接続します...")),
-                    );
-                  } else if (data['type'] == 'CALL_DECLINED' &&
-                      data['toUid'] == myUid) {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("相手が応答しました！接続します...")));
+                  } else if (data['type'] == 'CALL_DECLINED' && data['toUid'] == myUid) {
                     Navigator.of(context).popUntil((route) => route.isFirst);
-                    _showNotification("通話拒否", "${data['fromName']} が通話を拒否しました");
+                    if (isForeground) _showNotification("通話拒否", "${data['fromName']} が通話を拒否しました");
                     showDialog(
                       context: context,
                       builder: (ctx) => AlertDialog(
                         title: const Text("拒否されました"),
                         content: const Text("相手が応答できませんでした。"),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx),
-                            child: const Text("OK"),
-                          ),
-                        ],
+                        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("OK"))],
                       ),
                     );
-                  } else if (data['type'] == 'PHOTO_RESULT' &&
-                      data['toUid'] == myUid) {
-                    _showNotification(
-                      data['title'] ?? "審査結果",
-                      data['body'] ?? "写真の審査結果が届きました",
-                    );
+                  } else if (data['type'] == 'PHOTO_RESULT' && data['toUid'] == myUid) {
+                    if (isForeground) _showNotification(data['title'] ?? "審査結果", data['body'] ?? "写真の審査結果が届きました");
                   } else if (data['type'] == 'CHAT') {
-                    _showNotification(
-                      data['title'] ?? "新着メール",
-                      data['body'] ?? "メッセージが届いています",
-                    );
-                  } else if (data['type'] == 'MISSION' ||
-                      data['type'] == 'SUCCESS') {
-                    _showNotification(
-                      data['title'] ?? "GAME UPDATE",
-                      data['body'] ?? "新しい情報があります",
-                    );
+                    if (isForeground) _showNotification(data['title'] ?? "新着メール", data['body'] ?? "メッセージが届いています");
+                  } else if (data['type'] == 'MISSION' || data['type'] == 'SUCCESS') {
+                    if (isForeground) _showNotification(data['title'] ?? "GAME UPDATE", data['body'] ?? "新しい情報があります");
                   } else {
-                    _showNotification(
-                      data['title'] ?? "通知",
-                      data['body'] ?? "",
-                    );
+                    if (isForeground) _showNotification(data['title'] ?? "通知", data['body'] ?? "");
                   }
                 }
               }
@@ -329,8 +293,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _showIncomingCallDialog(Map<String, dynamic> data) {
-    _isIncomingCall = true; // ★追加: ダイアログが出た瞬間に「着信中」にする
-
+    _isIncomingCall = true; // ★昨日追加したフラグ
     FlutterRingtonePlayer().playRingtone(looping: true);
 
     showDialog(
@@ -347,7 +310,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           TextButton(
             child: const Text("拒否", style: TextStyle(color: Colors.red)),
             onPressed: () {
-              FlutterRingtonePlayer().stop(); // ★修正: ()を追加
+              FlutterRingtonePlayer().stop();
               Navigator.pop(dialogContext);
               FirebaseFirestore.instance
                   .collection('games')
@@ -369,7 +332,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
             child: const Text("応答"),
             onPressed: () async {
-              FlutterRingtonePlayer().stop(); // ★修正: ()を追加
+              FlutterRingtonePlayer().stop();
               Navigator.pop(dialogContext);
               String channelId = data['channelId'];
 
@@ -391,8 +354,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ],
       ),
     ).then((_) {
-      _isIncomingCall = false; // ★追加: ダイアログが消えたら「着信中」を解除する
-      FlutterRingtonePlayer().stop(); 
+      _isIncomingCall = false; // ★昨日追加したフラグ解除
+      FlutterRingtonePlayer().stop();
     });
   }
 
