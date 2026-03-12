@@ -251,57 +251,57 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 if (data['createdAt'] != null &&
                     DateTime.now().difference((data['createdAt'] as Timestamp).toDate()).inSeconds < 5) {
                   
-                  // ① 共通：バイブレーション
                   HapticFeedback.heavyImpact();
 
-                  // ② 今、画面が開かれているか？ と、iPhoneかどうかの判定
                   bool isForeground = WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
                   bool isIOS = defaultTargetPlatform == TargetPlatform.iOS;
 
-                  // ③ 【超重要】iPhoneでアプリを開いている時だけ、手動で強制的に「ピロリン♪」を鳴らす！（無音問題の解決）
-                  if (isForeground && isIOS) {
-                    FlutterRingtonePlayer().playNotification();
-                  }
-
-                  // --- 個別の処理 ---
+                  // 📞 【着信の場合】
                   if (data['type'] == 'CALL_REQUEST' && data['toUid'] == myUid) {
-                    if (isForeground) {
-                      _showIncomingCallDialog(data); // アプリを開いていれば着信画面を出す
-                    } else {
-                      // 裏画面の時：iPhoneはPCサーバーに任せる。AndroidだけFlutterのバナーを出す。
-                      if (!isIOS) {
-                        _showNotification(
-                          "📞 着信",
-                          "${data['fromName']} から着信中...",
-                          isCall: true,
-                          payload: "${data['channelId']}|${data['fromUid']}",
-                        );
-                      }
-                    }
-                  } else if (data['type'] == 'CALL_ACCEPTED' && data['toUid'] == myUid) {
-                    Navigator.of(context).popUntil((route) => route.isFirst || route.settings.name != null);
-                    _launchDiscordChannel(data['channelId']);
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("相手が応答しました！接続します...")));
-                  } else if (data['type'] == 'CALL_DECLINED' && data['toUid'] == myUid) {
-                    Navigator.of(context).popUntil((route) => route.isFirst);
-                    if (isForeground) {
-                      showDialog(
-                        context: context,
-                        builder: (ctx) => AlertDialog(
-                          title: const Text("拒否されました"),
-                          content: const Text("相手が応答できませんでした。"),
-                          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("OK"))],
-                        ),
+                    
+                    // ★超重要：裏画面でも表画面でも、必ず着信ダイアログを準備して着信音を鳴らす！
+                    _showIncomingCallDialog(data); 
+
+                    if (!isForeground && !isIOS) {
+                      // Androidの裏画面の時だけ、追加で通知バナーを出す
+                      _showNotification(
+                        "📞 着信",
+                        "${data['fromName']} から着信中...",
+                        isCall: true,
+                        payload: "${data['channelId']}|${data['fromUid']}",
                       );
-                    } else {
-                      if (!isIOS) _showNotification("通話拒否", "${data['fromName']} が通話を拒否しました");
                     }
-                  } else {
-                    // --- MISSION, CHAT などその他の通知 ---
-                    // iPhoneは「PCサーバー（Web Push）」がバナーを出すので、Flutterからは絶対にバナーを出さない（ダブり完全消滅）
-                    // Androidは自前サーバー非対応なので、必ずFlutterからバナーを出す
-                    if (!isIOS) {
-                      _showNotification(data['title'] ?? "通知", data['body'] ?? "新しい情報があります");
+                  } 
+                  // 📩 【それ以外の通知の場合】
+                  else {
+                    // iPhoneで画面を開いている時だけ、「ピロリン♪」を鳴らす（着信音との被り防止）
+                    if (isForeground && isIOS) {
+                      FlutterRingtonePlayer().playNotification();
+                    }
+
+                    if (data['type'] == 'CALL_ACCEPTED' && data['toUid'] == myUid) {
+                      Navigator.of(context).popUntil((route) => route.isFirst || route.settings.name != null);
+                      _launchDiscordChannel(data['channelId']);
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("相手が応答しました！接続します...")));
+                    } else if (data['type'] == 'CALL_DECLINED' && data['toUid'] == myUid) {
+                      Navigator.of(context).popUntil((route) => route.isFirst);
+                      if (isForeground) {
+                        showDialog(
+                          context: context,
+                          builder: (ctx) => AlertDialog(
+                            title: const Text("拒否されました"),
+                            content: const Text("相手が応答できませんでした。"),
+                            actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("OK"))],
+                          ),
+                        );
+                      } else {
+                        if (!isIOS) _showNotification("通話拒否", "${data['fromName']} が通話を拒否しました");
+                      }
+                    } else {
+                      // MISSION, CHAT 等
+                      if (!isIOS) {
+                        _showNotification(data['title'] ?? "通知", data['body'] ?? "新しい情報があります");
+                      }
                     }
                   }
                 }
@@ -313,7 +313,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   void _showIncomingCallDialog(Map<String, dynamic> data) {
     _isIncomingCall = true;
-    FlutterRingtonePlayer().playRingtone(looping: true);
+
+    // ★修正：着信音を「マナーモード貫通のアラーム設定」で強制的にループ再生する！
+    FlutterRingtonePlayer().play(
+      android: AndroidSounds.ringtone,
+      ios: IosSounds.electronic,
+      looping: true,
+      volume: 1.0,
+      asAlarm: true, 
+    );
 
     showDialog(
       context: context,

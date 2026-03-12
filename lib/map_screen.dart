@@ -823,7 +823,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
             );
           }
         }
-
+        
         // 2. 投票ミッション用エリア
         if (isVotingMission) {
           List<dynamic> rawA = mission['areaPointsA'] ?? [];
