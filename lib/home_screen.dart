@@ -10,7 +10,6 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:flutter_lock_task/flutter_lock_task.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -83,9 +82,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    if (!kIsWeb && _isLocked) {
-      FlutterLockTask().stopLockTask();
-    }
     FlutterRingtonePlayer().stop();
     super.dispose();
   }
@@ -500,18 +496,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  void _checkLockStatus(String status) {
-    if (kIsWeb) return;
-
-    if (!widget.isSecureMode) return;
-    if (status == 'ACTIVE' && !_isLocked) {
-      FlutterLockTask().startLockTask();
-      _isLocked = true;
-    } else if (status != 'ACTIVE' && _isLocked) {
-      FlutterLockTask().stopLockTask();
-      _isLocked = false;
-    }
-  }
+  
 
   void _checkMissionTimeLimit(Map<String, dynamic> activeMission) async {
     if (activeMission.isEmpty) return;
@@ -590,10 +575,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!kIsWeb) await _notificationsPlugin.cancel(0);
     final messenger = ScaffoldMessenger.of(context);
 
-    if (!kIsWeb && _isLocked) {
-      await FlutterLockTask().stopLockTask();
-      setState(() => _isLocked = false);
-    }
 
     // ★修正: アプリ用URL(discord://)とWeb用URL(https://)を用意
     final Uri appUrl = Uri.parse(
@@ -2775,13 +2756,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               } else if (status == 'ACTIVE') {
                 Duration remaining = end.difference(now);
 
-                // ★追加: 制限時間が来たら自動でFINISHEDに更新
+                // ★修正: 制限時間が来たら自動でFINISHEDに更新し、通知を飛ばす！
                 if (remaining.isNegative || remaining.inSeconds == 0) {
                   remaining = Duration.zero;
-                  FirebaseFirestore.instance
-                      .collection('games')
-                      .doc('game_001')
-                      .update({'status': 'FINISHED'});
+                  
+                  // ★プロの技：トランザクションを使って、誰か1人のスマホの処理だけを反映させる（通知スパム防止）
+                  FirebaseFirestore.instance.runTransaction((transaction) async {
+                    var gameRef = FirebaseFirestore.instance.collection('games').doc('game_001');
+                    var snap = await transaction.get(gameRef);
+                    
+                    // まだステータスが ACTIVE の時だけ、FINISHED に変更して通知を送る
+                    if (snap.exists && snap.data()?['status'] == 'ACTIVE') {
+                      transaction.update(gameRef, {'status': 'FINISHED'});
+                      
+                      var msgRef = FirebaseFirestore.instance.collection('games').doc('game_001').collection('messages').doc();
+                      transaction.set(msgRef, {
+                        'title': "ゲーム終了！",
+                        'body': "制限時間を迎えました！逃走中終了です。\n結果発表を確認してください！",
+                        'type': 'GAME_END',
+                        'toUid': 'ALL',
+                        'createdAt': FieldValue.serverTimestamp(),
+                      });
+                    }
+                  });
                 }
 
                 displayTime =
@@ -2863,7 +2860,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         leading: IconButton(
           icon: const Icon(Icons.logout, color: Colors.grey),
           onPressed: () async {
-            if (!kIsWeb && _isLocked) FlutterLockTask().stopLockTask();
             await FirebaseAuth.instance.signOut();
             Navigator.pushReplacement(
               context,
@@ -2914,7 +2910,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               if (activeMission!['type'] == 'INFORM') isInformerMission = true;
             }
           }
-          _checkLockStatus(status);
+          
 
           // ★追加: 結果画面への分岐 (Roleを渡す)
           if (status == 'FINISHED') {
@@ -3757,9 +3753,20 @@ class _SettingsAppScreenState extends State<SettingsAppScreen> {
   }
 
   void _finishGame() async {
+    // 1. ゲームのステータスを「終了」にする
     await FirebaseFirestore.instance.collection('games').doc('game_001').update(
       {'status': 'FINISHED'},
     );
+
+    // ★追加：全員のスマホに「ゲーム終了」の通知（メッセージ）を強制送信する！
+    await FirebaseFirestore.instance.collection('games').doc('game_001').collection('messages').add({
+      'title': "ゲーム終了！",
+      'body': "逃走中が終了しました。結果発表を確認してください！",
+      'type': 'GAME_END',
+      'toUid': 'ALL',
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("ゲームを終了し、結果発表へ移行しました")));
       Navigator.pop(context);

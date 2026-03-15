@@ -46,7 +46,6 @@ dependencies:
   mobile_scanner: ^7.1.4
   flutter_local_notifications: ^19.5.0
   image_picker: ^1.2.1
-  flutter_lock_task: ^0.0.2
   qr_flutter: ^4.1.0
   flutter_ringtone_player: ^4.0.0+4
   wakelock_plus: ^1.4.0
