@@ -58,7 +58,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _isAppInForeground = true; // ★初期化
+    
     _initNotifications();
+    _requestInitialPermissions(); // ★追加：ここで一気に権限を要求！
+    
     _setupMessageListener();
     FirebaseFirestore.instance
         .collection('.info')
@@ -78,7 +81,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
     });
   }
+  Future<void> _requestInitialPermissions() async {
+    // 1. 位置情報の許可 (iOS / Android 共通)
+    LocationPermission locationPermission = await Geolocator.checkPermission();
+    if (locationPermission == LocationPermission.denied) {
+      await Geolocator.requestPermission();
+    }
 
+    // 2. 通知の許可 (Android 13以降のスマホ用)
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      await _notificationsPlugin
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>()
+          ?.requestNotificationsPermission(); // Androidに「通知を送らせて！」と要求
+    }
+  }
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
