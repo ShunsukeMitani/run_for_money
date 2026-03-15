@@ -32,7 +32,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   LatLng _myLocation = const LatLng(35.681236, 139.767125);
   bool _isFirstLocationUpdate = true; // 初回移動用
   double _currentHeading = 0.0;
-  Timer? _positionTimer;
+  StreamSubscription<Position>? _positionStream; // ★タイマーの代わりにストリームを使う
   final String _uid = FirebaseAuth.instance.currentUser!.uid;
 
   bool _isSurrenderPossible = false;
@@ -77,7 +77,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
-    _positionTimer?.cancel();
+    _positionStream?.cancel(); // ★タイマーではなくセンサーを止める
     super.dispose();
   }
 
@@ -86,18 +86,22 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
     }
-    _updatePosition();
-    _positionTimer = Timer.periodic(
-      const Duration(seconds: 5),
-      (_) => _updatePosition(),
-    );
-  }
 
-  Future<void> _updatePosition() async {
+    // ★追加：Firestoreからゲーム開始時に決めた距離設定を読み込む！
+    int distanceFilter = 5;
     try {
-      Position p = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
+      var gameDoc = await FirebaseFirestore.instance.collection('games').doc('game_001').get();
+      if (gameDoc.exists) {
+        distanceFilter = gameDoc.data()?['settings_distanceFilter'] ?? 5;
+      }
+    } catch(e) {}
+
+    final LocationSettings locationSettings = LocationSettings(
+      accuracy: LocationAccuracy.high,
+      distanceFilter: distanceFilter, // ★設定された距離をセット
+    );
+
+    _positionStream = Geolocator.getPositionStream(locationSettings: locationSettings).listen((Position p) async {
       LatLng newLoc = LatLng(p.latitude, p.longitude);
 
       if (mounted) {
@@ -128,9 +132,9 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
               'updatedAt': FieldValue.serverTimestamp(),
             });
       }
-    } catch (e) {
+    }, onError: (e) {
       if (mounted) setState(() => _isConnected = false);
-    }
+    });
   }
 
   void _checkAreaOutSync() async {
@@ -477,19 +481,20 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
 
   Future<void> _executeSurrender() async {
     String uid = FirebaseAuth.instance.currentUser!.uid;
-    var gameDoc = await FirebaseFirestore.instance
-        .collection('games')
-        .doc('game_001')
-        .get();
+    var gameDoc = await FirebaseFirestore.instance.collection('games').doc('game_001').get();
     var gameData = gameDoc.data()!;
 
     DateTime startTime = (gameData['startTime'] as Timestamp).toDate();
     DateTime now = DateTime.now();
+    
+    // ★単価が途中で変わっても壊れない計算式
     double rate = (gameData['settings_moneyRate'] ?? 100).toDouble();
+    double basePrize = (gameData['basePrize'] ?? 0).toDouble();
+    DateTime lastChanged = (gameData['lastRateChangedAt'] as Timestamp?)?.toDate() ?? startTime;
 
-    int elapsed = now.difference(startTime).inSeconds;
+    int elapsed = now.difference(lastChanged).inSeconds;
     if (elapsed < 0) elapsed = 0;
-    int prize = (elapsed * rate).toInt();
+    int prize = (basePrize + (elapsed * rate)).toInt();
 
     await FirebaseFirestore.instance
         .collection('games')
@@ -518,9 +523,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         });
 
     if (mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("自首が成立しました")));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("自首が成立しました")));
       Navigator.pop(context);
     }
   }
@@ -572,13 +575,10 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
 
                         if (pData['isReported'] == true &&
                             pData['reportedBy'] != null) {
-                          body =
-                              "${pData['reportedBy']} の密告により\n${pData['name']} が確保されました。";
+                          body = "${pData['reportedBy']} の密告により\n${pData['name']} が確保されました。";
                         }
 
-                        var gameRef = FirebaseFirestore.instance
-                            .collection('games')
-                            .doc('game_001');
+                        var gameRef = FirebaseFirestore.instance.collection('games').doc('game_001');
                         var gameSnap = await gameRef.get();
                         var gameData = gameSnap.data() as Map<String, dynamic>;
                         var mission = gameData['activeMission'];
@@ -588,6 +588,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                             mission['hunterRelease'] == true) {
                           int currentCaught = (mission['caughtCount'] ?? 0) + 1;
                           int limit = mission['hunterCount'] ?? 1;
+                          int bonusRate = mission['bonusRate'] ?? 100; // ★設定されたボーナス額を取得！
 
                           await gameRef.update({
                             'activeMission.caughtCount': currentCaught,
@@ -596,14 +597,36 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                           body += "\n(密告ミッションによる確保: $currentCaught/$limit 人)";
 
                           if (currentCaught >= limit) {
-                            await gameRef.update({'activeMission': null});
+                            await FirebaseFirestore.instance.runTransaction((transaction) async {
+                              DocumentSnapshot snap = await transaction.get(gameRef);
+                              if (!snap.exists) return;
+
+                              Map<String, dynamic> data = snap.data() as Map<String, dynamic>;
+                              DateTime now = DateTime.now();
+                              DateTime lastChanged = (data['lastRateChangedAt'] as Timestamp?)?.toDate() ?? (data['startTime'] as Timestamp).toDate();
+                              double currentRate = (data['settings_moneyRate'] ?? 100).toDouble();
+                              double basePrize = (data['basePrize'] ?? 0).toDouble();
+                              
+                              int elapsed = now.difference(lastChanged).inSeconds;
+                              if (elapsed < 0) elapsed = 0;
+                              double newBasePrize = basePrize + (elapsed * currentRate);
+                              double newRate = currentRate + bonusRate.toDouble(); // ★ボーナス額を足す！
+                              
+                              transaction.update(gameRef, {
+                                'basePrize': newBasePrize,
+                                'lastRateChangedAt': FieldValue.serverTimestamp(),
+                                'settings_moneyRate': newRate,
+                                'activeMission': null, 
+                              });
+                            });
+
                             await FirebaseFirestore.instance
                                 .collection('games')
                                 .doc('game_001')
                                 .collection('messages')
                                 .add({
-                                  'title': "ミッション終了",
-                                  'body': "規定人数が確保されたため、密告ミッションは終了しました。",
+                                  'title': "ミッションクリア！",
+                                  'body': "規定人数が確保されたため、密告ミッションは終了した。\nミッション成功により、賞金単価が【 1秒あたり${bonusRate}円 】アップした！",
                                   'type': 'SUCCESS',
                                   'toUid': 'ALL',
                                   'createdAt': FieldValue.serverTimestamp(),

@@ -94,12 +94,11 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
   }
 
   // ====================================================
-  // 1. 暗号解読ミッション (修正版)
+  // 1. 暗号解読ミッション
   // ====================================================
   Future<void> _startCodeMission() async {
     bool isLocationRestricted = false;
     LatLng? inputLocation;
-
     String penaltyType = 'NONE';
     int penaltyHunterCount = 1;
 
@@ -109,19 +108,13 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setState) {
-            final TextEditingController timeCtrl = TextEditingController(
-              text: "10",
-            );
-            final TextEditingController descCtrl = TextEditingController(
-              text: "",
-            );
+            final TextEditingController timeCtrl = TextEditingController(text: "10");
+            final TextEditingController descCtrl = TextEditingController(text: "");
+            final TextEditingController bonusCtrl = TextEditingController(text: "100"); // ★追加：ボーナス額入力
 
             return AlertDialog(
               backgroundColor: Colors.grey[900],
-              title: const Text(
-                "暗号解読設定",
-                style: TextStyle(color: Colors.indigoAccent),
-              ),
+              title: const Text("暗号解読設定", style: TextStyle(color: Colors.indigoAccent)),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -130,27 +123,30 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
                       controller: timeCtrl,
                       keyboardType: TextInputType.number,
                       style: const TextStyle(color: Colors.white),
-                      decoration: const InputDecoration(
-                        labelText: "制限時間 (分)",
-                        labelStyle: TextStyle(color: Colors.grey),
-                      ),
+                      decoration: const InputDecoration(labelText: "制限時間 (分)", labelStyle: TextStyle(color: Colors.grey)),
                     ),
                     const SizedBox(height: 10),
-                    const Text(
-                      "※指令文はペナルティ設定に基づいて自動生成されます",
-                      style: TextStyle(color: Colors.grey, fontSize: 12),
+                    const Text("※指令文は設定に基づいて自動生成されます", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                    const Divider(color: Colors.grey, height: 30),
+                    
+                    // ★追加：成功ボーナス設定
+                    const Text("成功時ボーナス設定", style: TextStyle(color: Colors.yellowAccent, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 5),
+                    TextField(
+                      controller: bonusCtrl,
+                      keyboardType: TextInputType.number,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(
+                        labelText: "単価アップ額 (円/秒)",
+                        labelStyle: TextStyle(color: Colors.grey),
+                        prefixIcon: Icon(Icons.trending_up, color: Colors.yellowAccent),
+                      ),
                     ),
 
                     const Divider(color: Colors.grey, height: 30),
                     SwitchListTile(
-                      title: const Text(
-                        "入力場所を制限する",
-                        style: TextStyle(color: Colors.white),
-                      ),
-                      subtitle: const Text(
-                        "特定の場所でのみ入力可能にする",
-                        style: TextStyle(color: Colors.grey, fontSize: 10),
-                      ),
+                      title: const Text("入力場所を制限する", style: TextStyle(color: Colors.white)),
+                      subtitle: const Text("特定の場所でのみ入力可能にする", style: TextStyle(color: Colors.grey, fontSize: 10)),
                       activeThumbColor: Colors.indigoAccent,
                       value: isLocationRestricted,
                       onChanged: (val) {
@@ -162,30 +158,12 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
                     ),
                     if (isLocationRestricted)
                       ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: inputLocation == null
-                              ? Colors.grey
-                              : Colors.green,
-                          foregroundColor: Colors.white,
-                        ),
+                        style: ElevatedButton.styleFrom(backgroundColor: inputLocation == null ? Colors.grey : Colors.green, foregroundColor: Colors.white),
                         icon: const Icon(Icons.map),
-                        label: Text(
-                          inputLocation == null ? "入力場所を指定" : "場所設定済み",
-                        ),
+                        label: Text(inputLocation == null ? "入力場所を指定" : "場所設定済み"),
                         onPressed: () async {
-                          final result = await Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => const MapScreen(
-                                myRole: 'GAME MASTER',
-                                myName: 'GM',
-                                initialMode: 'SELECT_LOCATION',
-                              ),
-                            ),
-                          );
-                          if (result != null && result is LatLng) {
-                            setState(() => inputLocation = result);
-                          }
+                          final result = await Navigator.push(context, MaterialPageRoute(builder: (context) => const MapScreen(myRole: 'GAME MASTER', myName: 'GM', initialMode: 'SELECT_LOCATION')));
+                          if (result != null && result is LatLng) setState(() => inputLocation = result);
                         },
                       ),
 
@@ -193,37 +171,23 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
                       selectedType: penaltyType,
                       hunterCount: penaltyHunterCount,
                       onTypeChanged: (val) => setState(() => penaltyType = val),
-                      onCountChanged: (val) =>
-                          penaltyHunterCount = int.tryParse(val) ?? 1,
+                      onCountChanged: (val) => penaltyHunterCount = int.tryParse(val) ?? 1,
                     ),
                   ],
                 ),
               ),
               actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text("キャンセル"),
-                ),
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text("キャンセル")),
                 ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.indigoAccent,
-                  ),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.indigoAccent),
                   onPressed: () async {
                     if (isLocationRestricted && inputLocation == null) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text("入力場所を指定してください")),
-                      );
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("入力場所を指定してください")));
                       return;
                     }
 
                     int min = int.tryParse(timeCtrl.text) ?? 10;
-                    var snapshot = await FirebaseFirestore.instance
-                        .collection('games')
-                        .doc('game_001')
-                        .collection('players')
-                        .where('role', isEqualTo: 'RUNNER')
-                        .where('status', isEqualTo: 'ALIVE')
-                        .get();
+                    var snapshot = await FirebaseFirestore.instance.collection('games').doc('game_001').collection('players').where('role', isEqualTo: 'RUNNER').where('status', isEqualTo: 'ALIVE').get();
                     if (snapshot.docs.isEmpty) {
                       _notify("生存中の逃走者がいません");
                       return;
@@ -234,92 +198,54 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
                     DateTime now = DateTime.now();
                     DateTime end = now.add(Duration(minutes: min));
 
-                    // ★修正: 指令文の自動生成 (例外条件の追加)
                     String bodyText = "";
                     if (penaltyType == 'HUNTER_RELEASE') {
-                      bodyText =
-                          "残り$min分で、ハンター$penaltyHunterCount体がエリアに追加される。\nこの事態を回避するには、\nメールで送られたコードの断片を逃走者同士で共有し、\n正しいコードを入力せよ。";
+                      bodyText = "残り$min分で、ハンター$penaltyHunterCount体が追加される。\n(正しいコードを入力した者は通達されない。)\nこの事態を回避するには、メールの断片を共有し正しいコードを入力せよ。";
                     } else if (penaltyType == 'LOCATION_EXPOSE') {
-                      // ★ここを変更: 正しいコードを入力した者は通達されない旨を明記
-                      bodyText =
-                          "残り$min分で、逃走者全員の位置情報がハンターに通達される。\n(ただし、正しいコードを入力した者は通達されない。)\nこの事態を回避するには、\nメールで送られたコードの断片を逃走者同士で共有し、\n正しいコードを入力せよ。";
+                      bodyText = "残り$min分で、逃走者全員の位置情報がハンターに通達される。\n(正しいコードを入力した者は通達されない。)\nこの事態を回避するには、メールの断片を共有し正しいコードを入力せよ。";
                     } else {
                       bodyText = "制限時間内に暗号を解読し、コードを入力せよ。\n残り$min分でミッションは終了する。";
                     }
 
                     if (isLocationRestricted) {
-                      bodyText += "\n\n【注意】\nコードの入力は「指定された地点（端末）」でしか行えない。";
+                      bodyText += "\n\n【注意】\nコード入力は「指定された地点」でしか行えない。";
                     } else {
                       bodyText += "\n\n(コードが分かったらその場で入力せよ)";
                     }
 
-                    await FirebaseFirestore.instance
-                        .collection('games')
-                        .doc('game_001')
-                        .update({
-                          'activeMission': {
-                            'type': 'CODE',
-                            'title': "暗号を解読せよ",
-                            'description': bodyText,
-                            'correctCode': code,
-                            'endTime': Timestamp.fromDate(end),
-                            'isLocationRestricted': isLocationRestricted,
-                            'inputLocation': isLocationRestricted
-                                ? {
-                                    'lat': inputLocation!.latitude,
-                                    'lng': inputLocation!.longitude,
-                                  }
-                                : null,
-                            'clearedUids': [],
-                            'penaltyType': penaltyType,
-                            'penaltyHunterCount': penaltyHunterCount,
-                          },
-                        });
+                    await FirebaseFirestore.instance.collection('games').doc('game_001').update({
+                      'activeMission': {
+                        'type': 'CODE',
+                        'title': "暗号を解読せよ",
+                        'description': bodyText,
+                        'correctCode': code,
+                        'endTime': Timestamp.fromDate(end),
+                        'isLocationRestricted': isLocationRestricted,
+                        'inputLocation': isLocationRestricted ? {'lat': inputLocation!.latitude, 'lng': inputLocation!.longitude} : null,
+                        'clearedUids': [],
+                        'penaltyType': penaltyType,
+                        'penaltyHunterCount': penaltyHunterCount,
+                        'bonusRate': int.tryParse(bonusCtrl.text) ?? 100, // ★ボーナス設定を保存！
+                      },
+                    });
 
-                    // ヒント配布
                     List<QueryDocumentSnapshot> runners = snapshot.docs;
                     int count = runners.length;
                     for (int i = 0; i < count; i++) {
                       String hint = "";
-                      if (count == 1) {
-                        hint = "コードは「$code」";
-                      } else if (count == 2)
-                        hint = (i == 0)
-                            ? "1,2文字目: ${digits[0]}${digits[1]}"
-                            : "3,4文字目: ${digits[2]}${digits[3]}";
-                      else if (count == 3)
-                        hint = (i == 0)
-                            ? "1,2文字目: ${digits[0]}${digits[1]}"
-                            : (i == 1
-                                  ? "3文字目: ${digits[2]}"
-                                  : "4文字目: ${digits[3]}");
-                      else
-                        hint = "${(i % 4) + 1}文字目: ${digits[i % 4]}";
+                      if (count == 1) hint = "コードは「$code」";
+                      else if (count == 2) hint = (i == 0) ? "1,2文字目: ${digits[0]}${digits[1]}" : "3,4文字目: ${digits[2]}${digits[3]}";
+                      else if (count == 3) hint = (i == 0) ? "1,2文字目: ${digits[0]}${digits[1]}" : (i == 1 ? "3文字目: ${digits[2]}" : "4文字目: ${digits[3]}");
+                      else hint = "${(i % 4) + 1}文字目: ${digits[i % 4]}";
 
-                      await FirebaseFirestore.instance
-                          .collection('games')
-                          .doc('game_001')
-                          .collection('messages')
-                          .add({
-                            'title': "極秘コード断片",
-                            'body': hint,
-                            'type': 'MISSION_HINT',
-                            'toUid': runners[i].id,
-                            'createdAt': FieldValue.serverTimestamp(),
-                          });
+                      await FirebaseFirestore.instance.collection('games').doc('game_001').collection('messages').add({
+                        'title': "極秘コード断片", 'body': hint, 'type': 'MISSION_HINT', 'toUid': runners[i].id, 'createdAt': FieldValue.serverTimestamp(),
+                      });
                     }
 
-                    await FirebaseFirestore.instance
-                        .collection('games')
-                        .doc('game_001')
-                        .collection('messages')
-                        .add({
-                          'title': "MISSION発動！",
-                          'body': bodyText,
-                          'type': 'MISSION',
-                          'toUid': 'ALL',
-                          'createdAt': FieldValue.serverTimestamp(),
-                        });
+                    await FirebaseFirestore.instance.collection('games').doc('game_001').collection('messages').add({
+                      'title': "MISSION発動！", 'body': bodyText, 'type': 'MISSION', 'toUid': 'ALL', 'createdAt': FieldValue.serverTimestamp(),
+                    });
 
                     if (mounted) {
                       Navigator.pop(context);
@@ -780,7 +706,7 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
   }
 
   // ====================================================
-  // 5. 密告ミッション (微調整版 - 位置公開なし)
+  // 5. 密告ミッション
   // ====================================================
   Future<void> _startInformerMission() async {
     String penaltyType = 'HUNTER_RELEASE';
@@ -794,16 +720,12 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setState) {
-            final TextEditingController timeCtrl = TextEditingController(
-              text: "10",
-            );
+            final TextEditingController timeCtrl = TextEditingController(text: "10");
+            final TextEditingController bonusCtrl = TextEditingController(text: "100"); // ★追加：ボーナス額入力
 
             return AlertDialog(
               backgroundColor: Colors.grey[900],
-              title: const Text(
-                "密告ミッション設定",
-                style: TextStyle(color: Colors.redAccent),
-              ),
+              title: const Text("密告ミッション設定", style: TextStyle(color: Colors.redAccent)),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -812,59 +734,54 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
                       controller: timeCtrl,
                       keyboardType: TextInputType.number,
                       style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(labelText: "制限時間 (分)", labelStyle: TextStyle(color: Colors.grey), prefixIcon: Icon(Icons.timer, color: Colors.white)),
+                    ),
+                    const Divider(color: Colors.grey, height: 30),
+
+                    // ★追加：成功ボーナス設定
+                    const Text("成功時ボーナス設定", style: TextStyle(color: Colors.yellowAccent, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 5),
+                    TextField(
+                      controller: bonusCtrl,
+                      keyboardType: TextInputType.number,
+                      style: const TextStyle(color: Colors.white),
                       decoration: const InputDecoration(
-                        labelText: "制限時間 (分)",
+                        labelText: "単価アップ額 (円/秒)",
                         labelStyle: TextStyle(color: Colors.grey),
-                        prefixIcon: Icon(Icons.timer, color: Colors.white),
+                        prefixIcon: Icon(Icons.trending_up, color: Colors.yellowAccent),
                       ),
                     ),
                     const Divider(color: Colors.grey, height: 30),
 
                     SwitchListTile(
-                      title: const Text(
-                        "規定人数確保で終了",
-                        style: TextStyle(color: Colors.white),
-                      ),
+                      title: const Text("規定人数確保で終了", style: TextStyle(color: Colors.white)),
                       activeThumbColor: Colors.orange,
                       value: enableEndCondition,
-                      onChanged: (val) =>
-                          setState(() => enableEndCondition = val),
+                      onChanged: (val) => setState(() => enableEndCondition = val),
                     ),
                     if (enableEndCondition)
                       TextField(
                         keyboardType: TextInputType.number,
-                        controller: TextEditingController(
-                          text: endConditionCount.toString(),
-                        ),
-                        onChanged: (val) =>
-                            endConditionCount = int.tryParse(val) ?? 1,
+                        controller: TextEditingController(text: endConditionCount.toString()),
+                        onChanged: (val) => endConditionCount = int.tryParse(val) ?? 1,
                         style: const TextStyle(color: Colors.white),
-                        decoration: const InputDecoration(
-                          labelText: "終了条件 (確保人数)",
-                          labelStyle: TextStyle(color: Colors.orange),
-                        ),
+                        decoration: const InputDecoration(labelText: "終了条件 (確保人数)", labelStyle: TextStyle(color: Colors.orange)),
                       ),
 
                     _buildPenaltySelector(
                       selectedType: penaltyType,
                       hunterCount: penaltyHunterCount,
                       onTypeChanged: (val) => setState(() => penaltyType = val),
-                      onCountChanged: (val) =>
-                          penaltyHunterCount = int.tryParse(val) ?? 1,
-                      excludeLocationExpose: true, // 位置公開を除外
+                      onCountChanged: (val) => penaltyHunterCount = int.tryParse(val) ?? 1,
+                      excludeLocationExpose: true, 
                     ),
                   ],
                 ),
               ),
               actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text("キャンセル"),
-                ),
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text("キャンセル")),
                 ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.redAccent,
-                  ),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
                   onPressed: () async {
                     int min = int.tryParse(timeCtrl.text) ?? 10;
                     DateTime now = DateTime.now();
@@ -872,40 +789,29 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
 
                     String bodyText = "";
                     if (penaltyType == 'HUNTER_RELEASE') {
-                      bodyText =
-                          "残り$min分で、ハンター$penaltyHunterCount体がエリアに放出される。\nこれを阻止する方法はただ一つ。\n他の逃走者の位置を密告し、自分の身を守れ。\n密告によって逃走者が$endConditionCount人確保されるごとに、\nハンターの放出を1体分阻止することができる。";
+                      bodyText = "残り$min分で、ハンター$penaltyHunterCount体がエリアに放出される。\nこれを阻止する方法はただ一つ。\n他の逃走者の位置を密告し、自分の身を守れ。\n密告によって逃走者が$endConditionCount人確保されるごとに、\nハンターの放出を1体分阻止することができる。";
                     } else {
                       bodyText = "裏切り者が現れた。他逃走者の位置を密告せよ。\n制限時間は$min分だ。";
                     }
 
-                    await FirebaseFirestore.instance
-                        .collection('games')
-                        .doc('game_001')
-                        .update({
-                          'activeMission': {
-                            'type': 'INFORM',
-                            'title': "密告せよ！",
-                            'description': bodyText,
-                            'endTime': Timestamp.fromDate(end),
-                            'hunterRelease': enableEndCondition,
-                            'hunterCount': endConditionCount,
-                            'caughtCount': 0,
-                            'penaltyType': penaltyType,
-                            'penaltyHunterCount': penaltyHunterCount,
-                          },
-                        });
+                    await FirebaseFirestore.instance.collection('games').doc('game_001').update({
+                      'activeMission': {
+                        'type': 'INFORM',
+                        'title': "密告せよ！",
+                        'description': bodyText,
+                        'endTime': Timestamp.fromDate(end),
+                        'hunterRelease': enableEndCondition,
+                        'hunterCount': endConditionCount,
+                        'caughtCount': 0,
+                        'penaltyType': penaltyType,
+                        'penaltyHunterCount': penaltyHunterCount,
+                        'bonusRate': int.tryParse(bonusCtrl.text) ?? 100, // ★ボーナス設定を保存！
+                      },
+                    });
 
-                    await FirebaseFirestore.instance
-                        .collection('games')
-                        .doc('game_001')
-                        .collection('messages')
-                        .add({
-                          'title': "MISSION発動！",
-                          'body': bodyText,
-                          'type': 'MISSION',
-                          'toUid': 'ALL',
-                          'createdAt': FieldValue.serverTimestamp(),
-                        });
+                    await FirebaseFirestore.instance.collection('games').doc('game_001').collection('messages').add({
+                      'title': "MISSION発動！", 'body': bodyText, 'type': 'MISSION', 'toUid': 'ALL', 'createdAt': FieldValue.serverTimestamp(),
+                    });
 
                     if (mounted) {
                       Navigator.pop(context);
@@ -945,6 +851,51 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
       }
     }
     _notify("ミッション終了");
+  }
+
+// ====================================================
+  // 単価アップ処理
+  // ====================================================
+  Future<void> _increaseRewardRate() async {
+    try {
+      await FirebaseFirestore.instance.runTransaction((transaction) async {
+        DocumentReference gameRef = FirebaseFirestore.instance.collection('games').doc('game_001');
+        DocumentSnapshot snap = await transaction.get(gameRef);
+        if (!snap.exists) return;
+
+        Map<String, dynamic> data = snap.data() as Map<String, dynamic>;
+        DateTime now = DateTime.now();
+        DateTime lastChanged = (data['lastRateChangedAt'] as Timestamp?)?.toDate() ?? (data['startTime'] as Timestamp).toDate();
+        double currentRate = (data['settings_moneyRate'] ?? 100).toDouble();
+        double basePrize = (data['basePrize'] ?? 0).toDouble();
+        
+        // 今までの賞金をセーブデータ(固定値)に変換する
+        int elapsed = now.difference(lastChanged).inSeconds;
+        if (elapsed < 0) elapsed = 0;
+        double newBasePrize = basePrize + (elapsed * currentRate);
+        double newRate = currentRate + 100.0; // ★ここで単価を100円アップ！
+        
+        transaction.update(gameRef, {
+          'basePrize': newBasePrize,
+          'lastRateChangedAt': FieldValue.serverTimestamp(),
+          'settings_moneyRate': newRate,
+        });
+
+        // 全員に通知
+        DocumentReference msgRef = FirebaseFirestore.instance.collection('games').doc('game_001').collection('messages').doc();
+        transaction.set(msgRef, {
+          'title': "賞金単価アップ！",
+          'body': "ミッション成功等により、賞金単価が【 1秒 ${newRate.toInt()}円 】にアップした！",
+          'type': 'SUCCESS',
+          'toUid': 'ALL',
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      });
+
+      _notify("賞金単価を100円アップしました！");
+    } catch (e) {
+      _notify("エラーが発生しました: $e");
+    }
   }
 
   Widget _buildBtn(
@@ -1085,6 +1036,13 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
                 "密告 (位置送信)",
                 Colors.red,
                 active ? null : _startInformerMission,
+              ),
+              const SizedBox(height: 10),
+              _buildBtn(
+                Icons.trending_up,
+                "単価アップ (+100円/秒)",
+                Colors.yellow,
+                _increaseRewardRate,
               ),
             ],
           );

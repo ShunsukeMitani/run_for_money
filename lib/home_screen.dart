@@ -436,16 +436,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     if (isCall) {
       androidDetails = AndroidNotificationDetails(
-        'call_channel_v5', // ★念のため数字を5にしてリフレッシュ
+        'call_channel_v5',
         '着信通知',
         channelDescription: '着信時のバナー表示用',
         importance: Importance.max,
         priority: Priority.high,
-        playSound: false,
+        playSound: false, // Androidは別途鳴らすので無音
         enableVibration: true,
         vibrationPattern: Int64List.fromList(<int>[0, 1000, 1000, 1000, 1000, 1000, 1000, 1000]),
         actions: [
-          // ★修正：showsUserInterface: true を追加して、ボタンを押した時にアプリを強制起動させる！
           const AndroidNotificationAction(
             'answer_id', 
             '応答', 
@@ -474,9 +473,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     NotificationDetails platformDetails = NotificationDetails(
       android: androidDetails,
       iOS: DarwinNotificationDetails(
-        presentSound: !isCall,
+        // ★修正：iOSは裏画面でRingtonePlayerが死んでしまうため、通知バナー自体の音を鳴らす！
+        presentSound: true, 
         presentBadge: true,
         presentAlert: true,
+        // ★追加：iOSに「これはすぐに見るべき重要な通知だ！」とアピールする
+        interruptionLevel: InterruptionLevel.timeSensitive, 
       ),
     );
 
@@ -2298,10 +2300,32 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
                   // 生存者数 <= クリア者数 ならミッション終了
                   if (clearedList.length >= runnersSnap.docs.length) {
-                    await FirebaseFirestore.instance
-                        .collection('games')
-                        .doc('game_001')
-                        .update({'activeMission': null});
+                    
+                    int bonusValue = gameSnapAfter.data()?['activeMission']['bonusRate'] ?? 100; // ★設定されたボーナス額を取得
+
+                    await FirebaseFirestore.instance.runTransaction((transaction) async {
+                      DocumentReference gameRef = FirebaseFirestore.instance.collection('games').doc('game_001');
+                      DocumentSnapshot snap = await transaction.get(gameRef);
+                      if (!snap.exists) return;
+
+                      Map<String, dynamic> data = snap.data() as Map<String, dynamic>;
+                      DateTime now = DateTime.now();
+                      DateTime lastChanged = (data['lastRateChangedAt'] as Timestamp?)?.toDate() ?? (data['startTime'] as Timestamp).toDate();
+                      double currentRate = (data['settings_moneyRate'] ?? 100).toDouble();
+                      double basePrize = (data['basePrize'] ?? 0).toDouble();
+                      
+                      int elapsed = now.difference(lastChanged).inSeconds;
+                      if (elapsed < 0) elapsed = 0;
+                      double newBasePrize = basePrize + (elapsed * currentRate);
+                      double newRate = currentRate + bonusValue.toDouble(); // ★ボーナス額を足す！
+                      
+                      transaction.update(gameRef, {
+                        'basePrize': newBasePrize,
+                        'lastRateChangedAt': FieldValue.serverTimestamp(),
+                        'settings_moneyRate': newRate,
+                        'activeMission': null,
+                      });
+                    });
 
                     await FirebaseFirestore.instance
                         .collection('games')
@@ -2309,7 +2333,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         .collection('messages')
                         .add({
                           'title': "ミッションクリア！",
-                          'body': "全生存者がコード解除に成功！\nミッションは阻止された。",
+                          'body': "全生存者がコード解除に成功！\nミッション阻止により、賞金単価が【 1秒あたり${bonusValue}円 】アップした！",
                           'type': 'SUCCESS',
                           'toUid': 'ALL',
                           'createdAt': FieldValue.serverTimestamp(),
@@ -2413,11 +2437,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildCaughtScreen(Map<String, dynamic> gData) {
-    DateTime startTime =
-        (gData['startTime'] as Timestamp?)?.toDate() ?? DateTime.now();
-    DateTime endTime =
-        (gData['endTime'] as Timestamp?)?.toDate() ?? DateTime.now();
-    double moneyRate = (gData['settings_moneyRate'] ?? 100).toDouble();
+    DateTime startTime = (gData['startTime'] as Timestamp?)?.toDate() ?? DateTime.now();
+    DateTime endTime = (gData['endTime'] as Timestamp?)?.toDate() ?? DateTime.now();
 
     return Container(
       width: double.infinity,
@@ -2430,18 +2451,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             StreamBuilder(
               stream: Stream.periodic(const Duration(seconds: 1)),
               builder: (context, _) {
-                DateTime now = DateTime.now();
+                // ★この行が消えていたのが「nowがない」エラーの原因です！
+                DateTime now = DateTime.now(); 
+                
                 Duration left = endTime.difference(now);
                 String timeStr = left.isNegative
                     ? "00:00"
                     : "${left.inMinutes}:${(left.inSeconds % 60).toString().padLeft(2, '0')}";
-                int elapsed = now.difference(startTime).inSeconds;
-                if (elapsed < 0) elapsed = 0;
-                if (now.isAfter(endTime)) {
-                  elapsed = endTime.difference(startTime).inSeconds;
-                }
 
-                double currentMoney = elapsed * moneyRate;
+                // ★単価が変わっても壊れない計算式
+                double moneyRate = (gData['settings_moneyRate'] ?? 100).toDouble();
+                double basePrize = (gData['basePrize'] ?? 0).toDouble();
+                DateTime lastChanged = (gData['lastRateChangedAt'] as Timestamp?)?.toDate() ?? startTime;
+
+                DateTime calcTime = now.isAfter(endTime) ? endTime : now;
+                int elapsed = calcTime.difference(lastChanged).inSeconds;
+                if (elapsed < 0) elapsed = 0;
+
+                double currentMoney = basePrize + (elapsed * moneyRate);
+
                 String moneyStr;
                 if (currentMoney % 1 == 0) {
                   moneyStr =
@@ -2753,10 +2781,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               int money = 0;
               double currentMoney = 0.0;
               if (now.isAfter(start)) {
+                // ★ステータス画面の正しい計算式
                 DateTime calcTime = now.isAfter(end) ? end : now;
-                int elapsed = calcTime.difference(start).inSeconds;
                 double rate = (data['settings_moneyRate'] ?? 100).toDouble();
-                currentMoney = elapsed * rate;
+                double basePrize = (data['basePrize'] ?? 0).toDouble();
+                DateTime lastChanged = (data['lastRateChangedAt'] as Timestamp?)?.toDate() ?? start;
+
+                int elapsed = calcTime.difference(lastChanged).inSeconds;
+                if (elapsed < 0) elapsed = 0;
+                currentMoney = basePrize + (elapsed * rate);
               }
 
               String moneyStr;
@@ -3175,11 +3208,16 @@ class GameResultScreen extends StatelessWidget {
 
           DateTime startTime = (gameData['startTime'] as Timestamp).toDate();
           DateTime endTime = (gameData['endTime'] as Timestamp).toDate();
+          
+          // ★結果発表画面の正しい計算式
           double rate = (gameData['settings_moneyRate'] ?? 100).toDouble();
+          double basePrize = (gameData['basePrize'] ?? 0).toDouble();
+          DateTime lastChanged = (gameData['lastRateChangedAt'] as Timestamp?)?.toDate() ?? startTime;
 
-          int totalSeconds = endTime.difference(startTime).inSeconds;
+          int totalSeconds = endTime.difference(lastChanged).inSeconds;
           if (totalSeconds < 0) totalSeconds = 0;
-          double maxPrize = totalSeconds * rate;
+          double maxPrize = basePrize + (totalSeconds * rate);
+
 
           return StreamBuilder<QuerySnapshot>(
             stream: FirebaseFirestore.instance
@@ -3667,6 +3705,7 @@ class _SettingsAppScreenState extends State<SettingsAppScreen> {
   final TextEditingController _cntCtrl = TextEditingController(text: "10");
   final TextEditingController _intervalCtrl = TextEditingController(text: "5");
   final TextEditingController _delayCtrl = TextEditingController(text: "0");
+  final TextEditingController _distCtrl = TextEditingController(text: "5"); // ★追加：GPSエコ距離
   bool _hunterVision = false;
   bool _allowSurrender = true;
 
@@ -3682,9 +3721,11 @@ class _SettingsAppScreenState extends State<SettingsAppScreen> {
         'startTime': Timestamp.fromDate(start),
         'endTime': Timestamp.fromDate(end),
         'status': 'COUNTDOWN',
-        // ★修正: double.tryParseに変更
         'settings_moneyRate': double.tryParse(_moneyCtrl.text) ?? 100.0,
+        'basePrize': 0.0, 
+        'lastRateChangedAt': Timestamp.fromDate(start),
         'settings_updateInterval': int.tryParse(_intervalCtrl.text) ?? 5,
+        'settings_distanceFilter': int.tryParse(_distCtrl.text) ?? 5, // ★Firestoreに距離を保存
         'settings_hunterVision': _hunterVision,
         'settings_hunterDelay': int.tryParse(_delayCtrl.text) ?? 0,
         'settings_allowSurrender': _allowSurrender,
@@ -3706,15 +3747,12 @@ class _SettingsAppScreenState extends State<SettingsAppScreen> {
     if (mounted) Navigator.pop(context);
   }
 
-  // ★追加: ゲーム終了ボタンの処理
   void _finishGame() async {
     await FirebaseFirestore.instance.collection('games').doc('game_001').update(
       {'status': 'FINISHED'},
     );
     if (mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("ゲームを終了し、結果発表へ移行しました")));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("ゲームを終了し、結果発表へ移行しました")));
       Navigator.pop(context);
     }
   }
@@ -3737,22 +3775,14 @@ class _SettingsAppScreenState extends State<SettingsAppScreen> {
   }
 
   Future<void> _clearMessages() async {
-    var msgs = await FirebaseFirestore.instance
-        .collection('games')
-        .doc('game_001')
-        .collection('messages')
-        .get();
+    var msgs = await FirebaseFirestore.instance.collection('games').doc('game_001').collection('messages').get();
     for (var doc in msgs.docs) {
       await doc.reference.delete();
     }
   }
 
   Future<void> _resetDiscordAssignments() async {
-    var players = await FirebaseFirestore.instance
-        .collection('games')
-        .doc('game_001')
-        .collection('players')
-        .get();
+    var players = await FirebaseFirestore.instance.collection('games').doc('game_001').collection('players').get();
     for (var doc in players.docs) {
       await doc.reference.update({
         'discordId': null,
@@ -3761,11 +3791,7 @@ class _SettingsAppScreenState extends State<SettingsAppScreen> {
         'photoVerificationStatus': null,
       });
     }
-    var pool = await FirebaseFirestore.instance
-        .collection('games')
-        .doc('game_001')
-        .collection('discord_pool')
-        .get();
+    var pool = await FirebaseFirestore.instance.collection('games').doc('game_001').collection('discord_pool').get();
     for (var doc in pool.docs) {
       await doc.reference.update({
         'isUsed': false,
@@ -3777,11 +3803,7 @@ class _SettingsAppScreenState extends State<SettingsAppScreen> {
 
   void _clearPlayers() async {
     final messenger = ScaffoldMessenger.of(context);
-    var p = await FirebaseFirestore.instance
-        .collection('games')
-        .doc('game_001')
-        .collection('players')
-        .get();
+    var p = await FirebaseFirestore.instance.collection('games').doc('game_001').collection('players').get();
     for (var d in p.docs) {
       d.reference.delete();
     }
@@ -3808,60 +3830,33 @@ class _SettingsAppScreenState extends State<SettingsAppScreen> {
           const Divider(color: Colors.grey),
           _buildTF("位置更新頻度(秒) [推奨:5~10]", _intervalCtrl),
           const SizedBox(height: 10),
+          _buildTF("GPS更新距離(m) [推奨:3~10]", _distCtrl), // ★設定画面に距離入力欄を追加
+          const SizedBox(height: 10),
           _buildTF("ハンター表示遅延(秒)", _delayCtrl),
           SwitchListTile(
-            title: const Text(
-              "ハンターに位置を公開",
-              style: TextStyle(color: Colors.white),
-            ),
+            title: const Text("ハンターに位置を公開", style: TextStyle(color: Colors.white)),
             value: _hunterVision,
             activeThumbColor: Colors.redAccent,
             onChanged: (v) => setState(() => _hunterVision = v),
           ),
           SwitchListTile(
-            title: const Text(
-              "自首を許可 (ボタン表示)",
-              style: TextStyle(color: Colors.white),
-            ),
-            subtitle: const Text(
-              "OFFにすると地図から自首ボタンが消えます",
-              style: TextStyle(color: Colors.grey, fontSize: 12),
-            ),
+            title: const Text("自首を許可 (ボタン表示)", style: TextStyle(color: Colors.white)),
+            subtitle: const Text("OFFにすると地図から自首ボタンが消えます", style: TextStyle(color: Colors.grey, fontSize: 12)),
             value: _allowSurrender,
             activeThumbColor: Colors.yellowAccent,
             onChanged: (v) => setState(() => _allowSurrender = v),
           ),
           const SizedBox(height: 20),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.redAccent,
-              padding: const EdgeInsets.all(15),
-            ),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, padding: const EdgeInsets.all(15)),
             onPressed: _startGame,
-            child: const Text(
-              "開始",
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
+            child: const Text("開始", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
           ),
           const SizedBox(height: 40),
-
-          // ★追加: 終了ボタン
           ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.indigo,
-              padding: const EdgeInsets.all(15),
-            ),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.indigo, padding: const EdgeInsets.all(15)),
             icon: const Icon(Icons.stop_circle),
-            label: const Text(
-              "ゲーム終了 (結果発表へ)",
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
+            label: const Text("ゲーム終了 (結果発表へ)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
             onPressed: _finishGame,
           ),
           ElevatedButton.icon(
@@ -3875,10 +3870,7 @@ class _SettingsAppScreenState extends State<SettingsAppScreen> {
           const SizedBox(height: 20),
           TextButton(
             onPressed: _resetTimer,
-            child: const Text(
-              "リセット (Discord解放含む)",
-              style: TextStyle(color: Colors.orange),
-            ),
+            child: const Text("リセット (Discord解放含む)", style: TextStyle(color: Colors.orange)),
           ),
           TextButton(
             onPressed: _clearPlayers,
