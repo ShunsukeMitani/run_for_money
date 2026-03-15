@@ -70,7 +70,11 @@
 	<string>ゲーム内で現在位置を表示し、エリア判定を行うために位置情報を使用します。</string>
 	<key>NSLocationAlwaysUsageDescription</key>
 	<string>バックグラウンドでも位置情報を更新するために使用します。</string>
-
+	<key>NSCameraUsageDescription</key>
+	<string>ミッションの写真撮影やQRコードの読み取りにカメラを使用します。</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>ミッションの証拠写真を送信するために写真ライブラリを使用します。</string>
+	</dict>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>discord</string>
