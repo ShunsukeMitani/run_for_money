@@ -187,8 +187,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           String myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
           
           if (response.actionId == 'answer_id') {
+            // ★追加：バイブと通知バナー（ID:999）を完全に強制キル！
+            Vibration.cancel();
+            _notificationsPlugin.cancel(999);
             FlutterRingtonePlayer().stop();
-            // ★修正：ダイアログが出ている時「だけ」画面を閉じる（エラー回避の絶対防壁）
+            
             if (mounted && _isIncomingCall) {
               Navigator.of(context, rootNavigator: true).pop();
             }
@@ -206,8 +209,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             await _launchDiscordChannel(channelId);
 
           } else if (response.actionId == 'decline_id') {
+            // ★追加：バイブと通知バナー（ID:999）を完全に強制キル！
+            Vibration.cancel();
+            _notificationsPlugin.cancel(999);
             FlutterRingtonePlayer().stop();
-            // ★修正：こちらも同様
+            
             if (mounted && _isIncomingCall) {
               Navigator.of(context, rootNavigator: true).pop();
             }
@@ -349,19 +355,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _showIncomingCallDialog(Map<String, dynamic> data) {
+    if (_isIncomingCall) return; // ★追加：既に着信画面が出ている場合は、バイブループを2重に作らない！（暴走防止の絶対防壁）
     _isIncomingCall = true;
 
-    // ★修正：専用ツールを使った「絶対にサボらない」強力な着信バイブループ
     void startVibrationLoop() async {
       bool? hasVibrator = await Vibration.hasVibrator();
       if (hasVibrator == true) {
         while (_isIncomingCall) {
-          Vibration.vibrate(duration: 1000); // 1秒間、全力で震える！
-          await Future.delayed(const Duration(seconds: 2)); // 2秒待つ（1秒震えて1秒休むペース）
+          Vibration.vibrate(duration: 1000);
+          await Future.delayed(const Duration(seconds: 2));
         }
       }
     }
-    startVibrationLoop(); // バイブ開始！
+    startVibrationLoop();
 
     FlutterRingtonePlayer().play(
       android: AndroidSounds.ringtone,
@@ -385,8 +391,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           TextButton(
             child: const Text("拒否", style: TextStyle(color: Colors.red)),
             onPressed: () {
-              _isIncomingCall = false; // ループ停止フラグ
-              Vibration.cancel(); // ★バイブを強制ストップ！
+              _isIncomingCall = false;
+              Vibration.cancel();
+              _notificationsPlugin.cancel(999); // ★追加：裏画面のOS通知も念のため消去
               FlutterRingtonePlayer().stop();
               Navigator.pop(dialogContext);
               FirebaseFirestore.instance.collection('games').doc('game_001').collection('messages').add({
@@ -405,8 +412,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
             child: const Text("応答"),
             onPressed: () async {
-              _isIncomingCall = false; // ループ停止フラグ
-              Vibration.cancel(); // ★バイブを強制ストップ！
+              _isIncomingCall = false;
+              Vibration.cancel();
+              _notificationsPlugin.cancel(999); // ★追加：裏画面のOS通知も念のため消去
               FlutterRingtonePlayer().stop();
               Navigator.pop(dialogContext);
               String channelId = data['channelId'];
@@ -426,7 +434,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
     ).then((_) {
       _isIncomingCall = false;
-      Vibration.cancel(); // ★ダイアログが消えた時も念のためストップ
+      Vibration.cancel(); // ★追加：万が一ダイアログが閉じられた時もキル
+      _notificationsPlugin.cancel(999);
       FlutterRingtonePlayer().stop();
     });
   }
