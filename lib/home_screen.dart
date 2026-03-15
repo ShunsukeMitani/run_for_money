@@ -21,6 +21,7 @@ import 'mission_control_screen.dart';
 import 'package:flutter/services.dart'; // バイブレーション用
 import 'package:flutter_ringtone_player/flutter_ringtone_player.dart'; // 着信音
 import 'area_editor_screen.dart'; // ★これを一番上のimportのまとまりに追加
+import 'package:vibration/vibration.dart'; // ★本物のバイブツール
 
 class HomeScreen extends StatefulWidget {
   final String myRole;
@@ -177,7 +178,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await _notificationsPlugin.initialize(
       initializationSettings,
       onDidReceiveNotificationResponse: (NotificationResponse response) async {
-        FlutterRingtonePlayer().stop();
         final String? payload = response.payload;
         
         if (payload != null && payload.contains('|')) {
@@ -187,9 +187,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           String myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
           
           if (response.actionId == 'answer_id') {
+            FlutterRingtonePlayer().stop();
+            // ★修正：ダイアログが出ている時「だけ」画面を閉じる（エラー回避の絶対防壁）
             if (mounted && _isIncomingCall) {
               Navigator.of(context, rootNavigator: true).pop();
             }
+            _isIncomingCall = false;
+
             if (myUid.isNotEmpty) {
               await FirebaseFirestore.instance.collection('games').doc('game_001').collection('messages').add({
                 'type': 'CALL_ACCEPTED',
@@ -200,10 +204,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               });
             }
             await _launchDiscordChannel(channelId);
+
           } else if (response.actionId == 'decline_id') {
+            FlutterRingtonePlayer().stop();
+            // ★修正：こちらも同様
             if (mounted && _isIncomingCall) {
               Navigator.of(context, rootNavigator: true).pop();
             }
+            _isIncomingCall = false;
+
             if (myUid.isNotEmpty) {
               await FirebaseFirestore.instance.collection('games').doc('game_001').collection('messages').add({
                 'title': "通話拒否",
@@ -298,22 +307,38 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     _launchDiscordChannel(data['channelId']);
                     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("相手が応答しました！接続します...")));
                   } else if (data['type'] == 'CALL_DECLINED' && data['toUid'] == myUid) {
-                    Navigator.of(context).popUntil((route) => route.isFirst);
-                    if (isForeground) {
-                      showDialog(
-                        context: context,
-                        builder: (ctx) => AlertDialog(
-                          title: const Text("拒否されました"),
-                          content: const Text("相手が応答できませんでした。"),
-                          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("OK"))],
-                        ),
-                      );
-                    } else {
-                      if (!isIOS) _showNotification("通話拒否", "${data['fromName']} が通話を拒否しました");
-                    }
-                  } else {
-                    if (!isIOS) _showNotification(data['title'] ?? "通知", data['body'] ?? "新しい情報があります");
-                  }
+                        Navigator.of(context).popUntil((route) => route.isFirst);
+                        if (isForeground) {
+                          showDialog(
+                            context: context,
+                            builder: (ctx) => AlertDialog(
+                              title: const Text("拒否されました"),
+                              content: const Text("相手が応答できませんでした。"),
+                              actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("OK"))],
+                            ),
+                          );
+                        } else {
+                          if (!isIOS) _showNotification("通話拒否", "${data['fromName']} が通話を拒否しました");
+                        }
+                        
+                      // ⬇️⬇️ ★ここから追加：発信者がキャンセルした時の処理 ⬇️⬇️
+                      } else if (data['type'] == 'CALL_CANCELED' && data['toUid'] == myUid) {
+                        if (_isIncomingCall) {
+                          _isIncomingCall = false; // フラグを折る
+                          Vibration.cancel(); // バイブを強制ストップ！
+                          FlutterRingtonePlayer().stop(); // 着信音を強制ストップ！
+                          Navigator.of(context, rootNavigator: true).pop(); // 着信ダイアログを強制的に閉じる！
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text("相手が発信をキャンセルしました")),
+                          );
+                        }
+                        // ★さらに最強のハッカー技：裏画面で出ている「着信バナー(ID: 999)」もOSに命令して強制消去する！
+                        _notificationsPlugin.cancel(999);
+                      // ⬆️⬆️ ★ここまで追加 ⬆️⬆️
+
+                      } else {
+                        if (!isIOS) _showNotification(data['title'] ?? "通知", data['body'] ?? "新しい情報があります");
+                      }
                 }
               }
             }
@@ -326,13 +351,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void _showIncomingCallDialog(Map<String, dynamic> data) {
     _isIncomingCall = true;
 
-    // ★修正：着信音を「マナーモード貫通のアラーム設定」で強制的にループ再生する！
+    // ★修正：専用ツールを使った「絶対にサボらない」強力な着信バイブループ
+    void startVibrationLoop() async {
+      bool? hasVibrator = await Vibration.hasVibrator();
+      if (hasVibrator == true) {
+        while (_isIncomingCall) {
+          Vibration.vibrate(duration: 1000); // 1秒間、全力で震える！
+          await Future.delayed(const Duration(seconds: 2)); // 2秒待つ（1秒震えて1秒休むペース）
+        }
+      }
+    }
+    startVibrationLoop(); // バイブ開始！
+
     FlutterRingtonePlayer().play(
       android: AndroidSounds.ringtone,
       ios: IosSounds.electronic,
       looping: true,
       volume: 1.0,
-      asAlarm: true, 
+      asAlarm: false,
     );
 
     showDialog(
@@ -349,21 +385,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           TextButton(
             child: const Text("拒否", style: TextStyle(color: Colors.red)),
             onPressed: () {
+              _isIncomingCall = false; // ループ停止フラグ
+              Vibration.cancel(); // ★バイブを強制ストップ！
               FlutterRingtonePlayer().stop();
               Navigator.pop(dialogContext);
-              FirebaseFirestore.instance
-                  .collection('games')
-                  .doc('game_001')
-                  .collection('messages')
-                  .add({
-                    'title': "通話拒否",
-                    'body': "相手が通話を拒否しました。",
-                    'type': 'CALL_DECLINED',
-                    'fromUid': FirebaseAuth.instance.currentUser!.uid,
-                    'fromName': widget.myName,
-                    'toUid': data['fromUid'],
-                    'createdAt': FieldValue.serverTimestamp(),
-                  });
+              FirebaseFirestore.instance.collection('games').doc('game_001').collection('messages').add({
+                'title': "通話拒否",
+                'body': "相手が通話を拒否しました。",
+                'type': 'CALL_DECLINED',
+                'fromUid': FirebaseAuth.instance.currentUser!.uid,
+                'fromName': widget.myName,
+                'toUid': data['fromUid'],
+                'createdAt': FieldValue.serverTimestamp(),
+              });
               _hangUp(silent: true);
             },
           ),
@@ -371,21 +405,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
             child: const Text("応答"),
             onPressed: () async {
+              _isIncomingCall = false; // ループ停止フラグ
+              Vibration.cancel(); // ★バイブを強制ストップ！
               FlutterRingtonePlayer().stop();
               Navigator.pop(dialogContext);
               String channelId = data['channelId'];
 
-              await FirebaseFirestore.instance
-                  .collection('games')
-                  .doc('game_001')
-                  .collection('messages')
-                  .add({
-                    'type': 'CALL_ACCEPTED',
-                    'fromUid': FirebaseAuth.instance.currentUser!.uid,
-                    'toUid': data['fromUid'],
-                    'channelId': channelId,
-                    'createdAt': FieldValue.serverTimestamp(),
-                  });
+              await FirebaseFirestore.instance.collection('games').doc('game_001').collection('messages').add({
+                'type': 'CALL_ACCEPTED',
+                'fromUid': FirebaseAuth.instance.currentUser!.uid,
+                'toUid': data['fromUid'],
+                'channelId': channelId,
+                'createdAt': FieldValue.serverTimestamp(),
+              });
 
               _launchDiscordChannel(channelId);
             },
@@ -394,68 +426,67 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
     ).then((_) {
       _isIncomingCall = false;
+      Vibration.cancel(); // ★ダイアログが消えた時も念のためストップ
       FlutterRingtonePlayer().stop();
     });
   }
 
-  Future<void> _showNotification(
-    String title,
-    String body, {
-    bool isCall = false,
-    String? payload,
-  }) async {
-    if (kIsWeb) return;
+  Future<void> _showNotification(String title, String body, {bool isCall = false, String? payload}) async {
+    AndroidNotificationDetails androidDetails;
 
-    final Int64List callVibrationPattern = Int64List.fromList([0, 2000, 1000]);
-    final Int64List normalVibrationPattern = Int64List.fromList([0, 500]);
+    if (isCall) {
+      androidDetails = AndroidNotificationDetails(
+        'call_channel_v5', // ★念のため数字を5にしてリフレッシュ
+        '着信通知',
+        channelDescription: '着信時のバナー表示用',
+        importance: Importance.max,
+        priority: Priority.high,
+        playSound: false,
+        enableVibration: true,
+        vibrationPattern: Int64List.fromList(<int>[0, 1000, 1000, 1000, 1000, 1000, 1000, 1000]),
+        actions: [
+          // ★修正：showsUserInterface: true を追加して、ボタンを押した時にアプリを強制起動させる！
+          const AndroidNotificationAction(
+            'answer_id', 
+            '応答', 
+            titleColor: Color.fromARGB(255, 0, 255, 0),
+            showsUserInterface: true, 
+          ),
+          const AndroidNotificationAction(
+            'decline_id', 
+            '拒否', 
+            titleColor: Color.fromARGB(255, 255, 0, 0),
+            showsUserInterface: true, 
+          ),
+        ],
+      );
+    } else {
+      androidDetails = const AndroidNotificationDetails(
+        'default_normal_channel_v3',
+        'ゲーム通知',
+        importance: Importance.max,
+        priority: Priority.high,
+        playSound: true,
+        enableVibration: true,
+      );
+    }
 
-    // Android用設定
-    AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
-      'game_channel',
-      'Game Notifications',
-      importance: Importance.max,
-      priority: Priority.high,
-      enableVibration: true,
-      playSound: true,
-      vibrationPattern: isCall ? callVibrationPattern : normalVibrationPattern,
-      fullScreenIntent: isCall,
-      additionalFlags: isCall ? Int32List.fromList(<int>[4]) : null,
-      category: isCall
-          ? AndroidNotificationCategory.call
-          : AndroidNotificationCategory.message,
-      autoCancel: true,
-      actions: isCall
-          ? <AndroidNotificationAction>[
-              const AndroidNotificationAction(
-                'answer_id',
-                '応答',
-                showsUserInterface: true,
-                titleColor: Colors.green,
-              ),
-              const AndroidNotificationAction(
-                'decline_id',
-                '拒否',
-                showsUserInterface: true,
-                titleColor: Colors.red,
-              ),
-            ]
-          : null,
-    );
-
-    // ★追加: iOS用設定 (アプリ起動中でもバナーを出す設定)
-    const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
-      presentAlert: true, // アラートを表示
-      presentBadge: true, // バッジを更新
-      presentSound: true, // 音を鳴らす
-      presentBanner: true, // バナーを表示 (iOS 14+)
-    );
-
-    NotificationDetails details = NotificationDetails(
+    NotificationDetails platformDetails = NotificationDetails(
       android: androidDetails,
-      iOS: iosDetails, // ★ここに追加
+      iOS: DarwinNotificationDetails(
+        presentSound: !isCall,
+        presentBadge: true,
+        presentAlert: true,
+      ),
     );
 
-    await _notificationsPlugin.show(0, title, body, details, payload: payload);
+    await _notificationsPlugin.show(
+      isCall ? 999 : DateTime.now().millisecond,
+      title,
+      body,
+      platformDetails,
+      payload: payload,
+    );
   }
 
   void _checkLockStatus(String status) {
@@ -686,9 +717,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             actions: [
               TextButton(
                 child: const Text("キャンセル", style: TextStyle(color: Colors.red)),
-                onPressed: () {
-                  Navigator.pop(ctx);
-                  _hangUp();
+                onPressed: () async { // ★非同期処理(async)を追加
+                  Navigator.pop(ctx); // 自分の画面のダイアログを閉じる
+
+                  // ★追加：相手の着信（バイブ・音・画面）を強制停止させるキャンセル信号を発射！
+                  await FirebaseFirestore.instance
+                      .collection('games')
+                      .doc('game_001')
+                      .collection('messages')
+                      .add({
+                        'title': "着信キャンセル",
+                        'body': "発信がキャンセルされました",
+                        'type': 'CALL_CANCELED', 
+                        'fromUid': myUid,
+                        'toUid': targetUid,
+                        'createdAt': FieldValue.serverTimestamp(),
+                      });
+
+                  _hangUp(); // 自分のステータスをリセットする
                 },
               ),
             ],
