@@ -371,9 +371,9 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.grey[900],
-        title: const Text("ハンター封印", style: TextStyle(color: Colors.white)),
+        title: const Text("チェイサー封印", style: TextStyle(color: Colors.white)),
         content: const Text(
-          "このBOXを封印し、ハンター放出を阻止しますか？",
+          "このBOXを封印し、チェイサー放出を阻止しますか？",
           style: TextStyle(color: Colors.white70),
         ),
         actions: [
@@ -428,8 +428,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
               .collection('messages')
               .doc();
           transaction.set(msgRef, {
-            'title': "ハンター阻止！",
-            'body': "${widget.myName} がハンター1体を阻止しました！",
+            'title': "チェイサー阻止！",
+            'body': "${widget.myName} がチェイサー1体を阻止しました！",
             'type': 'SUCCESS',
             'fromName': "SYSTEM",
             'toUid': "ALL",
@@ -588,7 +588,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                             mission['hunterRelease'] == true) {
                           int currentCaught = (mission['caughtCount'] ?? 0) + 1;
                           int limit = mission['hunterCount'] ?? 1;
-                          int bonusRate = mission['bonusRate'] ?? 100; // ★設定されたボーナス額を取得！
+                          int bonusRate = mission['bonusRate'] ?? 100; 
 
                           await gameRef.update({
                             'activeMission.caughtCount': currentCaught,
@@ -610,7 +610,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                               int elapsed = now.difference(lastChanged).inSeconds;
                               if (elapsed < 0) elapsed = 0;
                               double newBasePrize = basePrize + (elapsed * currentRate);
-                              double newRate = currentRate + bonusRate.toDouble(); // ★ボーナス額を足す！
+                              double newRate = currentRate + bonusRate.toDouble(); 
                               
                               transaction.update(gameRef, {
                                 'basePrize': newBasePrize,
@@ -634,6 +634,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                           }
                         }
 
+                        // 1. 通常の確保通知を送信
                         await FirebaseFirestore.instance
                             .collection('games')
                             .doc('game_001')
@@ -644,6 +645,45 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                               'type': 'CAUGHT',
                               'createdAt': FieldValue.serverTimestamp(),
                             });
+
+                        // ====================================================
+                        // ★ここから追加：全滅チェックとゲーム終了処理
+                        // ====================================================
+                        var aliveRunners = await FirebaseFirestore.instance
+                            .collection('games')
+                            .doc('game_001')
+                            .collection('players')
+                            .where('role', isEqualTo: 'RUNNER')
+                            .where('status', isEqualTo: 'ALIVE')
+                            .get();
+                        
+                        // 生存者が0人になったら
+                        if (aliveRunners.docs.isEmpty) {
+                          // トランザクションで安全にゲームを終了させる（スパム防止）
+                          await FirebaseFirestore.instance.runTransaction((transaction) async {
+                            DocumentSnapshot snap = await transaction.get(gameRef);
+                            
+                            // まだゲームが ACTIVE の時だけ FINISHED に変更して通知を送る
+                            if (snap.exists && (snap.data() as Map)['status'] == 'ACTIVE') {
+                              transaction.update(gameRef, {'status': 'FINISHED'});
+                              
+                              DocumentReference msgRef = FirebaseFirestore.instance
+                                  .collection('games')
+                                  .doc('game_001')
+                                  .collection('messages')
+                                  .doc();
+                                  
+                              transaction.set(msgRef, {
+                                'title': "ゲーム終了！",
+                                'body': "サバイバーが全滅しました！チェイサーの勝利です。\n結果発表を確認してください！",
+                                'type': 'GAME_END',
+                                'toUid': 'ALL',
+                                'createdAt': FieldValue.serverTimestamp(),
+                              });
+                            }
+                          });
+                        }
+                        // ====================================================
                       },
                       child: const Text("確保"),
                     ),
@@ -951,7 +991,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
             }
 
            
-            // ハンターBOX
+            // チェイサーBOX
             for (var b in hunterBoxes) {
               bool locked = b['isLocked'] ?? false;
               markers.add(
@@ -968,11 +1008,11 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                         return;
                       }
                       if (widget.myRole != 'RUNNER') {
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("BOXを封印できるのは「逃走者」のみです", style: TextStyle(color: Colors.white)), backgroundColor: Colors.red));
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("BOXを封印できるのは「サバイバー」のみです", style: TextStyle(color: Colors.white)), backgroundColor: Colors.red));
                         return;
                       }
                       if (!isBoxMission) {
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("現在、ハンターBOXミッションは発動していません", style: TextStyle(color: Colors.white)), backgroundColor: Colors.orange));
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("現在、チェイサーBOXミッションは発動していません", style: TextStyle(color: Colors.white)), backgroundColor: Colors.orange));
                         return;
                       }
                       

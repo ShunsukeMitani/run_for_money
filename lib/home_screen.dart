@@ -546,7 +546,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           String failBody = "ミッション終了\n制限時間を過ぎたためミッションは終了した。";
 
           if (penaltyType == 'HUNTER_RELEASE') {
-            failBody += "\n\n【ペナルティ発動】\nハンターが $penaltyCount 体 放出された！";
+            failBody += "\n\n【ペナルティ発動】\nチェイサーが $penaltyCount 体 放出された！";
           } else if (penaltyType == 'LOCATION_EXPOSE') {
             failBody += "\n\n【ペナルティ発動】\n未クリア者の位置情報が公開される！";
           }
@@ -1135,7 +1135,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   .toList();
               if (docs.isEmpty) {
                 return const Text(
-                  "他逃走者なし",
+                  "他サバイバーなし",
                   style: TextStyle(color: Colors.white),
                 );
               }
@@ -1367,13 +1367,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             'body': "$myName からの密告！\n$targetName の位置情報が更新されました。",
             'type': 'MISSION',
             'toUid': 'ALL',
-            'visibleTo': 'HUNTER', // ハンターのみ表示
+            'visibleTo': 'HUNTER', // チェイサーのみ表示
             'createdAt': FieldValue.serverTimestamp(),
           });
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("$targetName を密告しました。\n(ハンターにのみ位置が通知されます)")),
+          SnackBar(content: Text("$targetName を密告しました。\n(チェイサーにのみ位置が通知されます)")),
         );
       }
     } catch (e) {
@@ -3753,12 +3753,25 @@ class _SettingsAppScreenState extends State<SettingsAppScreen> {
         'settings_allowSurrender': _allowSurrender,
       },
     );
+    
     var p = await FirebaseFirestore.instance
         .collection('games')
         .doc('game_001')
         .collection('players')
         .get();
+
+    // ==========================================
+    // ★追加：チェイサーの数を数える変数を準備
+    int hunterCount = 0;
+    // ==========================================
+
     for (var d in p.docs) {
+      // ★追加：データを取り出して、役職がチェイサーならカウントアップ！
+      var playerData = d.data() as Map<String, dynamic>;
+      if (playerData['role'] == 'HUNTER') {
+        hunterCount++;
+      }
+
       d.reference.update({
         'status': 'ALIVE',
         'money': 0,
@@ -3766,6 +3779,18 @@ class _SettingsAppScreenState extends State<SettingsAppScreen> {
         'photoVerificationStatus': null,
       });
     }
+
+    // ==========================================
+    // ★追加：全員のスマホに開始通知を飛ばす！
+    // ==========================================
+    await FirebaseFirestore.instance.collection('games').doc('game_001').collection('messages').add({
+      'title': "ゲームスタート！",
+      'body': "逃走時間は $min 分、チェイサーは $hunterCount 体です。健闘を祈ります！",
+      'type': 'GAME_START',
+      'toUid': 'ALL',
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+
     if (mounted) Navigator.pop(context);
   }
 
@@ -3865,9 +3890,9 @@ class _SettingsAppScreenState extends State<SettingsAppScreen> {
           const SizedBox(height: 10),
           _buildTF("GPS更新距離(m) [推奨:3~10]", _distCtrl), // ★設定画面に距離入力欄を追加
           const SizedBox(height: 10),
-          _buildTF("ハンター表示遅延(秒)", _delayCtrl),
+          _buildTF("チェイサー表示遅延(秒)", _delayCtrl),
           SwitchListTile(
-            title: const Text("ハンターに位置を公開", style: TextStyle(color: Colors.white)),
+            title: const Text("チェイサーに位置を公開", style: TextStyle(color: Colors.white)),
             value: _hunterVision,
             activeThumbColor: Colors.redAccent,
             onChanged: (v) => setState(() => _hunterVision = v),

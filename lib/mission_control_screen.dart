@@ -37,7 +37,7 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
     // 選択肢の作成
     List<DropdownMenuItem<String>> items = [
       const DropdownMenuItem(value: 'NONE', child: Text("なし")),
-      const DropdownMenuItem(value: 'HUNTER_RELEASE', child: Text("ハンター放出")),
+      const DropdownMenuItem(value: 'HUNTER_RELEASE', child: Text("チェイサー放出")),
     ];
 
     if (!excludeLocationExpose) {
@@ -189,7 +189,7 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
                     int min = int.tryParse(timeCtrl.text) ?? 10;
                     var snapshot = await FirebaseFirestore.instance.collection('games').doc('game_001').collection('players').where('role', isEqualTo: 'RUNNER').where('status', isEqualTo: 'ALIVE').get();
                     if (snapshot.docs.isEmpty) {
-                      _notify("生存中の逃走者がいません");
+                      _notify("生存中のサバイバーがいません");
                       return;
                     }
 
@@ -200,9 +200,9 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
 
                     String bodyText = "";
                     if (penaltyType == 'HUNTER_RELEASE') {
-                      bodyText = "残り$min分で、ハンター$penaltyHunterCount体が追加される。\n(正しいコードを入力した者は通達されない。)\nこの事態を回避するには、メールの断片を共有し正しいコードを入力せよ。";
+                      bodyText = "残り$min分で、チェイサー$penaltyHunterCount体が追加される。\n(正しいコードを入力した者は通達されない。)\nこの事態を回避するには、メールの断片を共有し正しいコードを入力せよ。";
                     } else if (penaltyType == 'LOCATION_EXPOSE') {
-                      bodyText = "残り$min分で、逃走者全員の位置情報がハンターに通達される。\n(正しいコードを入力した者は通達されない。)\nこの事態を回避するには、メールの断片を共有し正しいコードを入力せよ。";
+                      bodyText = "残り$min分で、サバイバー全員の位置情報がチェイサーに通達される。\n(正しいコードを入力した者は通達されない。)\nこの事態を回避するには、メールの断片を共有し正しいコードを入力せよ。";
                     } else {
                       bodyText = "制限時間内に暗号を解読し、コードを入力せよ。\n残り$min分でミッションは終了する。";
                     }
@@ -390,10 +390,10 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
                     String bodyText = "";
                     if (penaltyType == 'HUNTER_RELEASE') {
                       bodyText =
-                          "逃走エリアが2つに分割される。\nこれから行われる投票によって、\n票数の少ないエリアには、\nハンター$penaltyHunterCount体が放出される。";
+                          "逃走エリアが2つに分割される。\nこれから行われる投票によって、\n票数の少ないエリアには、\nチェイサー$penaltyHunterCount体が放出される。";
                     } else if (penaltyType == 'LOCATION_EXPOSE') {
                       bodyText =
-                          "逃走エリアが2つに分割される。\nこれから行われる投票によって、\n票数の少ないエリアにいる逃走者の位置情報が、\nハンターに通達される。";
+                          "逃走エリアが2つに分割される。\nこれから行われる投票によって、\n票数の少ないエリアにいるサバイバーの位置情報が、\nチェイサーに通達される。";
                     } else {
                       bodyText = "逃走エリアが2つに分割される。\nどちらかのエリアに投票せよ。";
                     }
@@ -462,7 +462,7 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
   }
 
   // ====================================================
-  // 3. ハンターBOX封印ミッション
+  // 3. チェイサーBOX封印ミッション
   // ====================================================
   Future<void> _startHunterBoxMission() async {
     await showDialog(
@@ -478,7 +478,7 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
             return AlertDialog(
               backgroundColor: Colors.grey[900],
               title: const Text(
-                "ハンターBOX設定",
+                "チェイサーBOX設定",
                 style: TextStyle(color: Colors.purpleAccent),
               ),
               content: Column(
@@ -559,7 +559,7 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
                     DateTime end = now.add(Duration(minutes: min));
 
                     String bodyText =
-                        "エリア内${boxes.length}ヶ所に設置されたハンターBOXが解除され、\n中からハンターが放出される。\nハンター放出を阻止するには、\nハンターBOXの近くまで行き、地図を使って封印せよ。\n制限時間は$min分。\n時間内に封印できなければ、\nエリアにハンターが解き放たれることとなる。";
+                        "エリア内${boxes.length}ヶ所に設置されたチェイサーBOXが解除され、\n中からチェイサーが放出される。\nチェイサー放出を阻止するには、\nチェイサーBOXの近くまで行き、地図を使って封印せよ。\n制限時間は$min分。\n時間内に封印できなければ、\nエリアにチェイサーが解き放たれることとなる。";
 
                     await FirebaseFirestore.instance
                         .collection('games')
@@ -567,7 +567,7 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
                         .update({
                           'activeMission': {
                             'type': 'HUNTER_BOX_MAP',
-                            'title': "ハンター放出を阻止せよ",
+                            'title': "チェイサー放出を阻止せよ",
                             'description': bodyText,
                             'endTime': Timestamp.fromDate(end),
                           },
@@ -586,7 +586,7 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
 
                     if (mounted) {
                       Navigator.pop(context);
-                      _notify("ハンターBOXミッションを開始しました");
+                      _notify("チェイサーBOXミッションを開始しました");
                     }
                   },
                   child: const Text("開始"),
@@ -666,7 +666,7 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
               DateTime end = now.add(Duration(minutes: min));
 
               String bodyText =
-                  "牢獄に捕らわれた逃走者を復活させるチャンスだ。残り$min分までに、$groupSize人組で写真を撮影し、GMに送信せよ。条件をクリアするごとに、復活カードを1枚獲得できる。ただし、1人の逃走者につき獲得できる復活カードは1枚まで、さらに、発行できる復活カードは最大$limit枚までとなっている。制限時間内に仲間を救い出せるかは、君たちの行動次第だ。";
+                  "牢獄に捕らわれたサバイバーを復活させるチャンスだ。残り$min分までに、$groupSize人組で写真を撮影し、GMに送信せよ。条件をクリアするごとに、復活カードを1枚獲得できる。ただし、1人のサバイバーにつき獲得できる復活カードは1枚まで、さらに、発行できる復活カードは最大$limit枚までとなっている。制限時間内に仲間を救い出せるかは、君たちの行動次第だ。";
 
               await FirebaseFirestore.instance
                   .collection('games')
@@ -789,9 +789,9 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
 
                     String bodyText = "";
                     if (penaltyType == 'HUNTER_RELEASE') {
-                      bodyText = "残り$min分で、ハンター$penaltyHunterCount体がエリアに放出される。\nこれを阻止する方法はただ一つ。\n他の逃走者の位置を密告し、自分の身を守れ。\n密告によって逃走者が$endConditionCount人確保されるごとに、\nハンターの放出を1体分阻止することができる。";
+                      bodyText = "残り$min分で、チェイサー$penaltyHunterCount体がエリアに放出される。\nこれを阻止する方法はただ一つ。\n他のサバイバーの位置を密告し、自分の身を守れ。\n密告によってサバイバーが$endConditionCount人確保されるごとに、\nチェイサーの放出を1体分阻止することができる。";
                     } else {
-                      bodyText = "裏切り者が現れた。他逃走者の位置を密告せよ。\n制限時間は$min分だ。";
+                      bodyText = "裏切り者が現れた。他サバイバーの位置を密告せよ。\n制限時間は$min分だ。";
                     }
 
                     await FirebaseFirestore.instance.collection('games').doc('game_001').update({
@@ -1019,7 +1019,7 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
               const SizedBox(height: 10),
               _buildBtn(
                 Icons.lock,
-                "ハンターBOX (地図配置)",
+                "チェイサーBOX (地図配置)",
                 Colors.purple,
                 active ? null : _startHunterBoxMission,
               ),
