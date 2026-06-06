@@ -829,17 +829,86 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
   }
 
   // ====================================================
-  // 共通処理
+  // 共通処理（ミッション強制終了 ＆ 投票集計）
   // ====================================================
   Future<void> _stopMission() async {
-    await FirebaseFirestore.instance.collection('games').doc('game_001').update(
-      {'activeMission': null, 'hunterBoxes': []},
-    );
-    var p = await FirebaseFirestore.instance
-        .collection('games')
-        .doc('game_001')
-        .collection('players')
-        .get();
+    var gameRef = FirebaseFirestore.instance.collection('games').doc('game_001');
+    var gameSnap = await gameRef.get();
+    
+    if (gameSnap.exists) {
+      var gameData = gameSnap.data() as Map<String, dynamic>;
+      var mission = gameData['activeMission'];
+
+      // ★ここから追加：もし終わったミッションが「エリア投票」だった場合の特別処理
+      if (mission != null && mission['type'] == 'VOTING') {
+        // ① 投票の集計
+        Map votes = mission['votes'] ?? {};
+        int countA = 0;
+        int countB = 0;
+        votes.forEach((uid, vote) {
+          if (vote == 'A') countA++;
+          if (vote == 'B') countB++;
+        });
+
+        // ② 勝敗の判定
+        String loser = 'B';
+        List<dynamic> loserPoints = mission['areaPointsB'] ?? [];
+
+        if (countB > countA) {
+          loser = 'A';
+          loserPoints = mission['areaPointsA'] ?? [];
+        } else if (countA == countB) {
+          // もし同票だった場合は、GMの権限でランダム（コイントス）で容赦なく決める！
+          if (Random().nextBool()) {
+            loser = 'A';
+            loserPoints = mission['areaPointsA'] ?? [];
+          }
+        }
+
+        // ③ マップの縮小（負けたエリアを進入禁止エリアに追加）
+        Map<String, dynamic> areaSettings = gameData['areaSettings'] ?? {};
+        List forbiddenAreas = List.from(areaSettings['forbiddenAreas'] ?? []);
+        
+        if (loserPoints.isNotEmpty) {
+          forbiddenAreas.add({
+            'points': loserPoints,
+            'name': '敗北エリア$loser', // 管理用の名前
+          });
+        }
+        areaSettings['forbiddenAreas'] = forbiddenAreas;
+
+        // ④ データベースを更新してマップを真っ赤に染める
+        await gameRef.update({
+          'activeMission': null,
+          // ★修正: "areaSettings" 全体ではなく、"forbiddenAreas" だけをピンポイントで追加・更新！
+          'areaSettings.forbiddenAreas': forbiddenAreas, 
+          'hunterBoxes': [], 
+        });
+
+        // ⑤ サバイバー全員に絶望（あるいは歓喜）の結果発表を通知！
+        String resultBody = "【 投票結果発表 】\nエリアA: $countA票\nエリアB: $countB票\n\nよって、エリア$loser が『進入禁止エリア』となった！\nエリア$loser に残っている者は直ちに脱出せよ！";
+        await gameRef.collection('messages').add({
+          'title': "投票結果！",
+          'body': resultBody,
+          'type': 'INFO', // 赤い警告を出したい場合は 'ALERT' などに変更
+          'toUid': 'ALL',
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+        
+        _notify("投票を集計し、エリア$loser を進入禁止に設定しました！");
+
+      } else {
+        // 投票以外の通常ミッションは、今まで通り看板を下ろすだけ
+        await gameRef.update({
+          'activeMission': null, 
+          'hunterBoxes': []
+        });
+        _notify("ミッションを終了しました");
+      }
+    }
+
+    // 密告や位置公開などの状態をリセット
+    var p = await gameRef.collection('players').get();
     for (var d in p.docs) {
       if (d['isExposed'] == true || d['isReported'] == true) {
         d.reference.update({
@@ -850,13 +919,49 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
         });
       }
     }
-    _notify("ミッション終了");
   }
 
 // ====================================================
-  // 単価アップ処理
+  // 単価アップ処理（自由入力）
   // ====================================================
   Future<void> _increaseRewardRate() async {
+    final TextEditingController rateCtrl = TextEditingController(text: "100");
+
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.grey[900],
+        title: const Text("単価アップ設定", style: TextStyle(color: Colors.yellow)),
+        content: TextField(
+          controller: rateCtrl,
+          keyboardType: TextInputType.number,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(
+            labelText: "アップする額 (円/秒)",
+            labelStyle: TextStyle(color: Colors.grey),
+            prefixIcon: Icon(Icons.trending_up, color: Colors.yellow),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("キャンセル"),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.yellow, foregroundColor: Colors.black),
+            onPressed: () async {
+              int upAmount = int.tryParse(rateCtrl.text) ?? 100;
+              Navigator.pop(context);
+              await _executeIncreaseRate(upAmount);
+            },
+            child: const Text("決定"),
+          )
+        ],
+      ),
+    );
+  }
+
+  Future<void> _executeIncreaseRate(int upAmount) async {
     try {
       await FirebaseFirestore.instance.runTransaction((transaction) async {
         DocumentReference gameRef = FirebaseFirestore.instance.collection('games').doc('game_001');
@@ -869,11 +974,10 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
         double currentRate = (data['settings_moneyRate'] ?? 100).toDouble();
         double basePrize = (data['basePrize'] ?? 0).toDouble();
         
-        // 今までの賞金をセーブデータ(固定値)に変換する
         int elapsed = now.difference(lastChanged).inSeconds;
         if (elapsed < 0) elapsed = 0;
         double newBasePrize = basePrize + (elapsed * currentRate);
-        double newRate = currentRate + 100.0; // ★ここで単価を100円アップ！
+        double newRate = currentRate + upAmount.toDouble(); // ★入力された額を加算！
         
         transaction.update(gameRef, {
           'basePrize': newBasePrize,
@@ -881,8 +985,7 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
           'settings_moneyRate': newRate,
         });
 
-        // 全員に通知
-        DocumentReference msgRef = FirebaseFirestore.instance.collection('games').doc('game_001').collection('messages').doc();
+        DocumentReference msgRef = gameRef.collection('messages').doc();
         transaction.set(msgRef, {
           'title': "賞金単価アップ！",
           'body': "ミッション成功等により、賞金単価が【 1秒 ${newRate.toInt()}円 】にアップした！",
@@ -891,8 +994,7 @@ class _MissionControlScreenState extends State<MissionControlScreen> {
           'createdAt': FieldValue.serverTimestamp(),
         });
       });
-
-      _notify("賞金単価を100円アップしました！");
+      _notify("賞金単価を$upAmount円アップしました！");
     } catch (e) {
       _notify("エラーが発生しました: $e");
     }

@@ -39,6 +39,8 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+  StreamSubscription<QuerySnapshot>? _messageSubscription;
+  StreamSubscription<QuerySnapshot>? _messageSub;
   final FlutterLocalNotificationsPlugin _notificationsPlugin =
       FlutterLocalNotificationsPlugin();
   final ImagePicker _picker = ImagePicker();
@@ -72,14 +74,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           onError: (_) => setState(() => _isConnected = false),
         );
 
-    Future.delayed(const Duration(seconds: 15), () {
-      if (mounted &&
-          !_hasValidUserLoaded &&
-          widget.myRole != 'GAME MASTER' &&
-          widget.myRole != 'DEVELOPER') {
-        _forceLogout();
-      }
-    });
+    // Future.delayed(const Duration(seconds: 15), () {
+    //   if (mounted &&
+    //       !_hasValidUserLoaded &&
+    //       widget.myRole != 'GAME MASTER' &&
+    //       widget.myRole != 'DEVELOPER') {
+    //     _forceLogout();
+    //   }
+    // });
   }
   Future<void> _requestInitialPermissions() async {
     // 1. 位置情報の許可 (iOS / Android 共通)
@@ -100,6 +102,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     FlutterRingtonePlayer().stop();
+    _messageSubscription?.cancel(); // ★これを追加！（画面を閉じる時に監視カメラを壊す）
     super.dispose();
   }
 
@@ -259,10 +262,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _setupMessageListener() {
-    User? user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    // ★追加：もし既に監視カメラが動いていたら、一度ぶっ壊す（二重登録の防止）
+    _messageSubscription?.cancel();
 
-    FirebaseFirestore.instance
+    // ★修正：ただ listen するのではなく、変数 _messageSubscription に代入する
+    _messageSubscription = FirebaseFirestore.instance
         .collection('games')
         .doc('game_001')
         .collection('messages')
@@ -270,100 +274,97 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         .limit(1)
         .snapshots()
         .listen((snapshot) {
-      if (snapshot.docs.isNotEmpty) {
-        var doc = snapshot.docs.first;
-        var data = doc.data();
-        String docId = doc.id;
-        String myUid = FirebaseAuth.instance.currentUser!.uid;
+      
+      // ==========================================================
+      // ★修正：データに「変更」があった時、それが「新規追加」かを確認する
+      // ==========================================================
+      for (var change in snapshot.docChanges) {
+        if (change.type == DocumentChangeType.added) { // ★完全に新規の時だけ！
+          var doc = change.doc;
+          var data = doc.data() as Map<String, dynamic>;
+          String docId = doc.id;
+          String myUid = FirebaseAuth.instance.currentUser!.uid;
 
-        if (data['visibleTo'] != null && data['visibleTo'] != widget.myRole) {
-          return;
-        }
+          if (data['visibleTo'] != null && data['visibleTo'] != widget.myRole) {
+            return;
+          }
 
-        if (data['toUid'] == myUid || data['toUid'] == "ALL") {
-          if (data['fromUid'] != myUid) {
-            if (data['createdAt'] != null) {
-              int diff = DateTime.now().difference((data['createdAt'] as Timestamp).toDate()).inSeconds;
-              
-              // ★着信だけは「60秒間」有効にする！
-              int timeLimit = (data['type'] == 'CALL_REQUEST') ? 60 : 5;
+          if (data['toUid'] == myUid || data['toUid'] == "ALL") {
+            if (data['fromUid'] != myUid) {
+              if (data['createdAt'] != null) {
+                int diff = DateTime.now().difference((data['createdAt'] as Timestamp).toDate()).inSeconds;
+                
+                int timeLimit = (data['type'] == 'CALL_REQUEST') ? 60 : 5;
 
-              if (diff < timeLimit) {
-                // ★すでに処理したメッセージは弾く（ダブり防止の絶対防壁）
-                if (_readMessageIds.contains(docId)) return;
-                _readMessageIds.add(docId);
+                if (diff < timeLimit) {
+                  if (_readMessageIds.contains(docId)) return;
+                  _readMessageIds.add(docId);
 
-                bool isForeground = WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
-                bool isIOS = defaultTargetPlatform == TargetPlatform.iOS;
+                  bool isForeground = WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+                  bool isIOS = defaultTargetPlatform == TargetPlatform.iOS;
 
-                // 着信以外はここでバイブを鳴らす
-                if (data['type'] != 'CALL_REQUEST') {
-                  HapticFeedback.heavyImpact();
-                }
-
-                // 📞 【着信の場合】
-                if (data['type'] == 'CALL_REQUEST' && data['toUid'] == myUid) {
-                  
-                  _showIncomingCallDialog(data); // 裏でも表でも絶対に着信ダイアログを出す
-
-                  if (!isForeground && !isIOS) {
-                    _showNotification(
-                      "📞 着信",
-                      "${data['fromName']} から着信中...",
-                      isCall: true,
-                      payload: "${data['channelId']}|${data['fromUid']}",
-                    );
-                  }
-                } 
-                // 📩 【それ以外の通知の場合】
-                else {
-                  if (isForeground && isIOS) {
-                    FlutterRingtonePlayer().playNotification();
+                  if (data['type'] != 'CALL_REQUEST') {
+                    HapticFeedback.heavyImpact();
                   }
 
-                  if (data['type'] == 'CALL_ACCEPTED' && data['toUid'] == myUid) {
-                    Navigator.of(context).popUntil((route) => route.isFirst || route.settings.name != null);
-                    _launchDiscordChannel(data['channelId']);
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("相手が応答しました！接続します...")));
-                  } else if (data['type'] == 'CALL_DECLINED' && data['toUid'] == myUid) {
-                        Navigator.of(context).popUntil((route) => route.isFirst);
-                        if (isForeground) {
-                          showDialog(
-                            context: context,
-                            builder: (ctx) => AlertDialog(
-                              title: const Text("拒否されました"),
-                              content: const Text("相手が応答できませんでした。"),
-                              actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("OK"))],
-                            ),
-                          );
-                        } else {
-                          if (!isIOS) _showNotification("通話拒否", "${data['fromName']} が通話を拒否しました");
-                        }
-                        
-                      // ⬇️⬇️ ★ここから追加：発信者がキャンセルした時の処理 ⬇️⬇️
-                      } else if (data['type'] == 'CALL_CANCELED' && data['toUid'] == myUid) {
-                        if (_isIncomingCall) {
-                          _isIncomingCall = false; // フラグを折る
-                          Vibration.cancel(); // バイブを強制ストップ！
-                          FlutterRingtonePlayer().stop(); // 着信音を強制ストップ！
-                          Navigator.of(context, rootNavigator: true).pop(); // 着信ダイアログを強制的に閉じる！
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text("相手が発信をキャンセルしました")),
-                          );
-                        }
-                        // ★さらに最強のハッカー技：裏画面で出ている「着信バナー(ID: 999)」もOSに命令して強制消去する！
-                        _notificationsPlugin.cancel(999);
-                      // ⬆️⬆️ ★ここまで追加 ⬆️⬆️
+                  // 📞 【着信の場合】
+                  if (data['type'] == 'CALL_REQUEST' && data['toUid'] == myUid) {
+                    _showIncomingCallDialog(data);
 
+                    if (!isForeground && !isIOS) {
+                      _showNotification(
+                        "📞 着信",
+                        "${data['fromName']} から着信中...",
+                        isCall: true,
+                        payload: "${data['channelId']}|${data['fromUid']}",
+                      );
+                    }
+                  } 
+                  // 📩 【それ以外の通知の場合】
+                  else {
+                    if (isForeground && isIOS) {
+                      FlutterRingtonePlayer().playNotification();
+                    }
+
+                    if (data['type'] == 'CALL_ACCEPTED' && data['toUid'] == myUid) {
+                      Navigator.of(context).popUntil((route) => route.isFirst || route.settings.name != null);
+                      _launchDiscordChannel(data['channelId']);
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("相手が応答しました！接続します...")));
+                    } else if (data['type'] == 'CALL_DECLINED' && data['toUid'] == myUid) {
+                      Navigator.of(context).popUntil((route) => route.isFirst);
+                      if (isForeground) {
+                        showDialog(
+                          context: context,
+                          builder: (ctx) => AlertDialog(
+                            title: const Text("拒否されました"),
+                            content: const Text("相手が応答できませんでした。"),
+                            actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("OK"))],
+                          ),
+                        );
                       } else {
-                        if (!isIOS) _showNotification(data['title'] ?? "通知", data['body'] ?? "新しい情報があります");
+                        if (!isIOS) _showNotification("通話拒否", "${data['fromName']} が通話を拒否しました");
                       }
+                    } else if (data['type'] == 'CALL_CANCELED' && data['toUid'] == myUid) {
+                      if (_isIncomingCall) {
+                        _isIncomingCall = false;
+                        Vibration.cancel();
+                        FlutterRingtonePlayer().stop();
+                        Navigator.of(context, rootNavigator: true).pop();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text("相手が発信をキャンセルしました")),
+                        );
+                      }
+                      _notificationsPlugin.cancel(999);
+                    } else {
+                      if (!isIOS) _showNotification(data['title'] ?? "通知", data['body'] ?? "新しい情報があります");
+                    }
+                  }
                 }
               }
             }
           }
-        }
-      }
+        } // end if (added)
+      } // end for
     });
   }
 
@@ -1012,37 +1013,43 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   void _vote(String option) async {
     String uid = FirebaseAuth.instance.currentUser!.uid;
-    var doc = await FirebaseFirestore.instance
-        .collection('games')
-        .doc('game_001')
-        .get();
-    if (doc.exists) {
-      Map data = doc.data() as Map<String, dynamic>;
-      Map votes =
-          (data['activeMission'] != null &&
-              data['activeMission']['votes'] != null)
-          ? data['activeMission']['votes']
-          : {};
+    DocumentReference gameRef = FirebaseFirestore.instance.collection('games').doc('game_001');
 
-      if (votes.containsKey(uid)) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("既に投票済みです。変更はできません。"),
-              backgroundColor: Colors.red,
-            ),
-          );
+    try {
+      await FirebaseFirestore.instance.runTransaction((transaction) async {
+        DocumentSnapshot doc = await transaction.get(gameRef);
+        if (!doc.exists) return;
+
+        Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
+        
+        // ミッションが終わっていたら何もしない
+        if (data['activeMission'] == null || data['activeMission']['type'] != 'VOTING') {
+          throw "投票期間は終了しました";
         }
-        return;
-      }
-      await FirebaseFirestore.instance
-          .collection('games')
-          .doc('game_001')
-          .update({'activeMission.votes.$uid': option});
+
+        Map votes = data['activeMission']['votes'] ?? {};
+
+        // 既に投票済みかチェック
+        if (votes.containsKey(uid)) {
+          throw "既に投票済みです。変更はできません。";
+        }
+
+        // ★安全に自分の票だけを追加して更新
+        votes[uid] = option;
+        transaction.update(gameRef, {'activeMission.votes': votes});
+      });
+
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text("エリア$option に投票しました")));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("エリア$option に投票しました")));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.toString()),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     }
   }
@@ -1176,6 +1183,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   // --- QRスキャナ (全画面) ---
   void _openQRScanner(BuildContext context) {
+    bool hasScanned = false; // ★追加：連続読み取りを防ぐための「鍵」
+
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -1188,10 +1197,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
           body: MobileScanner(
             onDetect: (capture) {
-              if (capture.barcodes.isNotEmpty) {
+              // ★修正：まだスキャンしていない時(hasScannedがfalse)だけ実行する！
+              if (!hasScanned && capture.barcodes.isNotEmpty) {
                 String? code = capture.barcodes.first.rawValue;
                 if (code != null) {
-                  Navigator.pop(context); // 閉じてから処理
+                  hasScanned = true; // ★ここで鍵をかける！（2回目以降のpopを完全シャットアウト）
+                  Navigator.pop(context); // 安全に1回だけカメラを閉じる
                   _scanToReviveProcess(code);
                 }
               }
@@ -2304,6 +2315,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   var clearedList =
                       gameSnapAfter.data()?['activeMission']['clearedUids'] ??
                       [];
+
+                  
 
                   // 生存者数 <= クリア者数 ならミッション終了
                   if (clearedList.length >= runnersSnap.docs.length) {

@@ -64,6 +64,8 @@ class _LoginScreenState extends State<LoginScreen> {
 
       // Firestoreにプレイヤー情報を保存
       // ★ここで _selectedRole をそのまま保存するので、DEVELOPERは正しくDEVELOPERになります
+      String myUid = FirebaseAuth.instance.currentUser!.uid;
+
       await FirebaseFirestore.instance
           .collection('games')
           .doc('game_001')

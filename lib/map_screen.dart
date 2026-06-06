@@ -28,6 +28,13 @@ class MapScreen extends StatefulWidget {
 }
 
 class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
+  Timer? _outOfAreaTimer;
+  Timer? _surrenderTimer;
+  bool _isPhysicallyInSurrenderZone = false;
+  
+  // ★設定値：GMが変えられるように後でFirestoreから取得してもOKです
+  final int _outOfAreaGraceSeconds = 10; // エリア外猶予（秒）
+  final int _surrenderGraceSeconds = 5;  // 自首待機（秒）
   final MapController _mapController = MapController();
   LatLng _myLocation = const LatLng(35.681236, 139.767125);
   bool _isFirstLocationUpdate = true; // 初回移動用
@@ -138,26 +145,12 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   }
 
   void _checkAreaOutSync() async {
-    if (widget.myRole != 'RUNNER') {
-      if (_isOutOfArea) setState(() => _isOutOfArea = false);
-      return;
-    }
+    if (widget.myRole != 'RUNNER') return;
 
     bool isNowOut = false;
     if (_cachedCurrentAreaPoints.isNotEmpty) {
-      List<LatLng> polygon = _cachedCurrentAreaPoints
-          .map(
-            (p) => LatLng(
-              (p['lat'] as num).toDouble(),
-              (p['lng'] as num).toDouble(),
-            ),
-          )
-          .toList();
-          
-      // 基本エリア内にいるかチェック
+      List<LatLng> polygon = _cachedCurrentAreaPoints.map((p) => LatLng((p['lat'] as num).toDouble(), (p['lng'] as num).toDouble())).toList();
       bool isInsideBase = _isPointInPolygon(_myLocation, polygon);
-
-      // 進入禁止エリア内にいるかチェック
       bool isInsideForbidden = false;
       for (var fArea in _cachedForbiddenAreas) {
         if (_isPointInPolygon(_myLocation, fArea)) {
@@ -165,25 +158,32 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
           break;
         }
       }
-
-      // 「基本エリアの外」 または 「進入禁止エリアの中」 なら警告発動
       isNowOut = !isInsideBase || isInsideForbidden;
+    }
+
+    // ★修正：即時発動ではなく、猶予タイマーを使う
+    if (isNowOut) {
+      if (_outOfAreaTimer == null && !_isOutOfArea) {
+        // エリアを出た瞬間にタイマースタート
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("⚠️ エリア外です！$_outOfAreaGraceSeconds秒以内に戻ってください！"), backgroundColor: Colors.orange));
+        
+        _outOfAreaTimer = Timer(Duration(seconds: _outOfAreaGraceSeconds), () async {
+          setState(() => _isOutOfArea = true);
+          await FirebaseFirestore.instance.collection('games').doc('game_001').collection('players').doc(_uid).update({'isOutOfArea': true});
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("🚨 チェイサーに位置情報が通達されました！"), backgroundColor: Colors.red));
+        });
+      }
     } else {
-      isNowOut = false;
-    }
-
-    if (isNowOut != _isOutOfArea) {
-      setState(() => _isOutOfArea = isNowOut);
-    }
-
-    if (_prevOutOfAreaState != isNowOut) {
-      _prevOutOfAreaState = isNowOut;
-      await FirebaseFirestore.instance
-          .collection('games')
-          .doc('game_001')
-          .collection('players')
-          .doc(_uid)
-          .update({'isOutOfArea': isNowOut});
+      // エリア内に戻れたらタイマーをキャンセルして安全圏へ
+      if (_outOfAreaTimer != null) {
+        _outOfAreaTimer!.cancel();
+        _outOfAreaTimer = null;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("安全エリアに戻りました。"), backgroundColor: Colors.green));
+      }
+      if (_isOutOfArea) {
+        setState(() => _isOutOfArea = false);
+        await FirebaseFirestore.instance.collection('games').doc('game_001').collection('players').doc(_uid).update({'isOutOfArea': false});
+      }
     }
   }
 
@@ -205,24 +205,95 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   }
 
   void _checkSurrenderZoneSync() {
-    if (!_cachedAllowSurrender) {
-      if (_isSurrenderPossible) setState(() => _isSurrenderPossible = false);
-      return;
-    }
-    bool hit = false;
+    // ★ボタンは常に出すので、ここでのフラグ操作は不要になりました
+  }
+
+  void _doSurrender() async {
+    // 1. まず、自分が自首ポイントの近くにいるか計算する
+    bool isInsideZone = false;
     for (var p in _cachedSurrenderPoints) {
-      double dist = Geolocator.distanceBetween(
-        _myLocation.latitude,
-        _myLocation.longitude,
-        (p['lat'] as num).toDouble(),
-        (p['lng'] as num).toDouble(),
-      );
+      double dist = Geolocator.distanceBetween(_myLocation.latitude, _myLocation.longitude, (p['lat'] as num).toDouble(), (p['lng'] as num).toDouble());
       if (dist <= ((p['radius'] as num?)?.toDouble() ?? 20.0)) {
-        hit = true;
+        isInsideZone = true;
         break;
       }
     }
-    if (hit != _isSurrenderPossible) setState(() => _isSurrenderPossible = hit);
+
+    // 2. 遠ければ弾く
+    if (!isInsideZone) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("自首ポイントのサークル内に入ってからボタンを押してください"), backgroundColor: Colors.red));
+      return;
+    }
+
+    // 3. サークル内ならカウントダウン開始！
+    int countdown = _surrenderGraceSeconds; // 5秒
+    bool isCanceled = false;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            if (countdown == _surrenderGraceSeconds) {
+              Timer.periodic(const Duration(seconds: 1), (timer) {
+                if (isCanceled) {
+                  timer.cancel();
+                  return;
+                }
+                
+                // カウントダウン中に動いてサークルから出たら強制キャンセル
+                bool stillInside = false;
+                for (var p in _cachedSurrenderPoints) {
+                  double dist = Geolocator.distanceBetween(_myLocation.latitude, _myLocation.longitude, (p['lat'] as num).toDouble(), (p['lng'] as num).toDouble());
+                  if (dist <= ((p['radius'] as num?)?.toDouble() ?? 20.0)) {
+                    stillInside = true;
+                    break;
+                  }
+                }
+
+                if (!stillInside) {
+                  timer.cancel();
+                  Navigator.pop(ctx);
+                  ScaffoldMessenger.of(this.context).showSnackBar(const SnackBar(content: Text("自首ポイントから離れたため中断しました"), backgroundColor: Colors.red));
+                  return;
+                }
+
+                if (countdown > 1) {
+                  setState(() => countdown--);
+                } else {
+                  timer.cancel();
+                  Navigator.pop(ctx);
+                  _executeSurrender();
+                }
+              });
+            }
+
+            return AlertDialog(
+              backgroundColor: Colors.grey[900],
+              title: const Text("自首通信中...", style: TextStyle(color: Colors.yellowAccent)),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text("この場にとどまってください", style: TextStyle(color: Colors.white70)),
+                  const SizedBox(height: 20),
+                  Text("$countdown", style: const TextStyle(color: Colors.redAccent, fontSize: 60, fontWeight: FontWeight.bold)),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    isCanceled = true;
+                    Navigator.pop(ctx);
+                  },
+                  child: const Text("キャンセル"),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   void _onMapTap(TapPosition t, LatLng p) {
@@ -451,33 +522,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     }
   }
 
-  void _doSurrender() async {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Colors.grey[900],
-        title: const Text("自首しますか？", style: TextStyle(color: Colors.white)),
-        content: const Text(
-          "現在の賞金を獲得してゲームから離脱します。\nこの操作は取り消せません。",
-          style: TextStyle(color: Colors.white70),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text("キャンセル"),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () async {
-              Navigator.pop(ctx);
-              await _executeSurrender();
-            },
-            child: const Text("自首する"),
-          ),
-        ],
-      ),
-    );
-  }
+
 
   Future<void> _executeSurrender() async {
     String uid = FirebaseAuth.instance.currentUser!.uid;
@@ -717,13 +762,15 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
           label: const Text("⚠️ エリア違反"),
           onPressed: null,
         );
-      } else if (_isSurrenderPossible)
+      } else {
+        // ★修正: サバイバーなら「常に」自首ボタンを表示する！
         actionBtn = FloatingActionButton.extended(
           heroTag: "surrender",
           backgroundColor: Colors.yellowAccent,
           label: const Text("自首する"),
-          onPressed: _doSurrender,
+          onPressed: _doSurrender, // ボタンを押した時の処理へ
         );
+      }
     }
 
     String title = "MAP";
@@ -831,6 +878,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         List<Polygon> polygons = [];
         List<Marker> markers = [];
         List<CircleMarker> circles = [];
+        List<Polyline> polylines = []; // ★追加：線を管理する箱
 
         List<LatLng> displayPolygon = [];
         Map assignments = d['areaAssignments'] ?? {};
@@ -886,7 +934,69 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
             );
           }
         }
-        
+        // ==========================================================
+        // ★ここから追加：暗号解読ミッションの目的地ピンと波紋を描画！
+        // ==========================================================
+        if (mission != null && mission['type'] == 'CODE') {
+          
+          // 画像に合わせて、座標フィールドを 'inputLocation' に修正します
+          var targetLoc = mission['inputLocation'];
+          
+          if (targetLoc != null) {
+            double? mLat = (targetLoc['lat'] as num?)?.toDouble();
+            double? mLng = (targetLoc['lng'] as num?)?.toDouble();
+
+            if (mLat != null && mLng != null) {
+              // ① マップ上に目立つ「鍵マーク」のピンを立てる
+              markers.add(
+                Marker(
+                  point: LatLng(mLat, mLng),
+                  width: 80,
+                  height: 80,
+                  child: Column(
+                    children: [
+                      const Icon(
+                        Icons.vpn_key, // 鍵アイコン
+                        color: Colors.amberAccent,
+                        size: 40,
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.black87,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Text(
+                          "解読ポイント",
+                          style: TextStyle(
+                            color: Colors.amberAccent,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+              
+              // ② 目的地周辺に黄色いレーダー波紋（サークル）を描画
+              circles.add(
+                CircleMarker(
+                  point: LatLng(mLat, mLng),
+                  radius: 15,
+                  color: Colors.amberAccent.withOpacity(0.3),
+                  borderColor: Colors.amber,
+                  borderStrokeWidth: 2,
+                  useRadiusInMeter: true,
+                ),
+              );
+            }
+          }
+        }
+        // ==========================================================
+
+
         // 2. 投票ミッション用エリア
         if (isVotingMission) {
           List<dynamic> rawA = mission['areaPointsA'] ?? [];
@@ -951,12 +1061,12 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
               .snapshots(),
           builder: (context, playerSnap) {
             if (_tempAreaPoints.isNotEmpty && _editMode == 'AREA') {
-              polygons.add(
-                Polygon(
+              // ★修正：polygons.add ではなく polylines.add にして、勝手に閉じない1本の線にする！
+              polylines.add(
+                Polyline(
                   points: _tempAreaPoints,
-                  color: Colors.yellowAccent.withOpacity(0.2),
-                  borderColor: Colors.yellow,
-                  borderStrokeWidth: 2,
+                  color: Colors.yellow.withOpacity(0.8),
+                  strokeWidth: 4,
                 ),
               );
               for (var p in _tempAreaPoints) {
@@ -1131,6 +1241,13 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
 
                 if (isCaught || isSurrendered) continue;
 
+                // ==========================================
+                // ★修正: visible の判定をする「前」に、密告されたサバイバーの描画を強制スキップさせる！
+                if (pd['role'] == 'RUNNER' && pd['isReported'] == true && isHunter) {
+                  continue; // ← この1行で、チェイサー側のマップでは密告ターゲットのリアルタイム描画を強制スキップ！
+                }
+                // ==========================================
+
                 bool visible = false;
                 if (isMe || isGM) {
                   visible = true;
@@ -1140,7 +1257,6 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                   visible = true;
 
                 if (!visible) continue;
-
                 Color iconColor = Colors.blue;
                 if (pd['role'] == 'HUNTER') {
                   iconColor = Colors.red;
@@ -1204,6 +1320,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                 ),
                 CircleLayer(circles: circles),
                 PolygonLayer(polygons: polygons),
+                PolylineLayer(polylines: polylines),
                 MarkerLayer(markers: markers),
               ],
             );
